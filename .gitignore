@@ -1,0 +1,7 @@
+# build output, attach the exe to a GitHub release instead
+*.exe
+# icon is extracted from the local game at build time, not ours to publish
+src/app.ico
+# personal files
+legacy/
+personal-setup.md
