@@ -23,7 +23,7 @@ namespace AzerothSync
 
     class MainForm : Form
     {
-        public const string Version = "1.1.0";
+        public const string Version = "1.1.1";
         readonly bool autoPlay;
         Settings settings;
         TextBox tbGame, tbCloud, tbSave, tbConfig;

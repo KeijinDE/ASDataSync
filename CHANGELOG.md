@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.1
+
+* A saved game config folder that no longer exists falls back to
+  `benilla-config` in the game folder or `C:\Git\wenilla\benilla-config`,
+  whichever exists.
+
 ## 1.1.0
 
 * If `AzerothSync.exe` sits in the game folder, it uses that game automatically.

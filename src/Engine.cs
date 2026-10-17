@@ -96,7 +96,12 @@ namespace AzerothSync
             // If this program sits in the game folder, that game always wins
             if (exeDir != null && File.Exists(Path.Combine(exeDir, GameExe))) s.GamePath = Path.Combine(exeDir, GameExe);
             if (s.CloudDir.Length == 0) s.CloudDir = DefaultCloudDir(exeDir);
-            if (s.ConfigDir.Length == 0) s.ConfigDir = DefaultConfigDir(s.GamePath);
+            // Empty or no longer existing: use what is actually there (game folder, then fallback)
+            if (s.ConfigDir.Length == 0 || !Directory.Exists(s.ConfigDir))
+            {
+                string found = DefaultConfigDir(s.GamePath);
+                if (s.ConfigDir.Length == 0 || Directory.Exists(found)) s.ConfigDir = found;
+            }
             return s;
         }
 
