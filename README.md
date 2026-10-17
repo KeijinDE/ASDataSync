@@ -33,21 +33,27 @@ state always wins. Do not play on two PCs at the same time.
 
 ## Setup
 
-1. Download `AzerothSync.exe` from the [releases](../../releases) and put it into a
-   folder inside your cloud drive, for example `Google Drive\AzerothSync`.
-   That folder becomes your sync folder.
+1. Download `AzerothSync.exe` from the [releases](../../releases) and put it
+   **into your game folder**, next to `AzerothSurvivors.exe`. It then finds
+   the game by itself.
 2. Start `AzerothSync.exe` and check the four paths at the top. Use `...` to
    change them:
-   * **Game**: your `AzerothSurvivors.exe`
-   * **Sync folder**: the folder from step 1
-   * **Save game folder**: normally `%APPDATA%\wenilla-rogue`
-   * **Game config folder**: the `benilla-config` folder next to the game
+   * **Game**: found automatically when AzerothSync sits in the game folder
+   * **Sync folder**: choose a folder inside your cloud drive, for example
+     `Google Drive\AzerothSync`
+   * **Save game folder**: normally `%APPDATA%\wenilla-rogue`, filled in automatically
+   * **Game config folder**: the `benilla-config` folder with `AddOns` and
+     `saved`. Taken from the game folder if it is there, otherwise
+     `C:\Git\wenilla\benilla-config` is suggested. Check it once.
 3. Click **Upload** on the PC that has your current progress.
 4. Click **Desktop shortcut**. From now on start the game with
    *Azeroth Survivors (Sync)* on your desktop.
-5. On every other PC: open the same `AzerothSync.exe` from your cloud drive,
-   check the paths, click **Desktop shortcut**, then play. The first time it
-   will ask about a conflict, choose **Use cloud**.
+5. On every other PC: put `AzerothSync.exe` into the game folder there, choose
+   the same sync folder, click **Desktop shortcut**, then play. The first time
+   it will ask about a conflict, choose **Use cloud**.
+
+Alternative: keep `AzerothSync.exe` inside the sync folder itself. Then the
+sync folder is found automatically and you choose the game once.
 
 Settings are stored per PC in `%LOCALAPPDATA%\AzerothSync\settings.ini`.
 

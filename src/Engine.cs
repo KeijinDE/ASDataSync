@@ -20,7 +20,9 @@ namespace AzerothSync
 
     public class Settings
     {
-        public const string DefaultGamePath = @"C:\Games\AzerothSurvivors\AzerothSurvivors.exe";
+        public const string GameExe = "AzerothSurvivors.exe";
+        public const string DefaultGamePath = @"C:\Games\AzerothSurvivors\" + GameExe;
+        public const string FallbackConfigDir = @"C:\Git\wenilla\benilla-config";
 
         public string GamePath, CloudDir, SaveDir, ConfigDir, StateDir;
 
@@ -34,11 +36,16 @@ namespace AzerothSync
             return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "wenilla-rogue");
         }
 
-        // The game keeps AddOns and saved (SavedVariables) in benilla-config next to its executable
+        // AddOns and saved (SavedVariables) live in benilla-config: next to the game if it exists there, otherwise the fallback
         public static string DefaultConfigDir(string gamePath)
         {
-            try { return Path.Combine(Path.GetDirectoryName(gamePath), "benilla-config"); }
-            catch { return ""; }
+            try
+            {
+                string next = Path.Combine(Path.GetDirectoryName(gamePath), "benilla-config");
+                if (Directory.Exists(next)) return next;
+            }
+            catch { }
+            return FallbackConfigDir;
         }
 
         // If this program sits inside an existing sync folder, that folder is the default
@@ -86,6 +93,8 @@ namespace AzerothSync
                 }
                 catch { }
             }
+            // If this program sits in the game folder, that game always wins
+            if (exeDir != null && File.Exists(Path.Combine(exeDir, GameExe))) s.GamePath = Path.Combine(exeDir, GameExe);
             if (s.CloudDir.Length == 0) s.CloudDir = DefaultCloudDir(exeDir);
             if (s.ConfigDir.Length == 0) s.ConfigDir = DefaultConfigDir(s.GamePath);
             return s;

@@ -23,6 +23,7 @@ namespace AzerothSync
 
     class MainForm : Form
     {
+        public const string Version = "1.1.0";
         readonly bool autoPlay;
         Settings settings;
         TextBox tbGame, tbCloud, tbSave, tbConfig;
@@ -34,7 +35,7 @@ namespace AzerothSync
         {
             this.autoPlay = autoPlay;
             settings = Settings.Load(Settings.DefaultStateDir(), Path.GetDirectoryName(Application.ExecutablePath));
-            Text = "AzerothSync";
+            Text = "AzerothSync " + Version;
             Font = new Font("Segoe UI", 9f);
             ClientSize = new Size(720, 560);
             MinimumSize = new Size(560, 460);
@@ -59,7 +60,7 @@ namespace AzerothSync
             tbSave = AddRow(grid, "Save game folder", settings.SaveDir, false,
                 "Usually %APPDATA%\\wenilla-rogue");
             tbConfig = AddRow(grid, "Game config folder", settings.ConfigDir, false,
-                "The benilla-config folder that contains AddOns and saved. Usually next to the game executable.");
+                "The benilla-config folder that contains AddOns and saved. Taken from next to the game if it exists there, otherwise " + Settings.FallbackConfigDir + ".");
             group.Controls.Add(grid);
             root.Controls.Add(group);
 
@@ -79,8 +80,13 @@ namespace AzerothSync
             Shown += delegate
             {
                 if (autoPlay) Run(e => e.Play());
-                else if (settings.CloudDir.Length == 0) Write("Choose a sync folder inside your cloud drive to get started.", Level.Warn);
-                else Run(e => e.Status());
+                else
+                {
+                    if (!File.Exists(settings.GamePath)) Write("Game not found. Put AzerothSync.exe into the game folder or choose the game above.", Level.Warn);
+                    if (!Directory.Exists(settings.ConfigDir)) Write("Game config folder not found. Choose the benilla-config folder above, otherwise AddOns are skipped.", Level.Warn);
+                    if (settings.CloudDir.Length == 0) Write("Choose a sync folder inside your cloud drive to get started.", Level.Warn);
+                    else Run(e => e.Status());
+                }
             };
             FormClosing += (s, e) =>
             {

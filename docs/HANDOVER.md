@@ -36,9 +36,9 @@ script asks conflicts per area instead of once.
 
 | What | Default |
 |---|---|
-| Game | `C:\Games\AzerothSurvivors\AzerothSurvivors.exe` (setting) |
+| Game | `AzerothSurvivors.exe` next to `AzerothSync.exe` if present (always wins), otherwise the setting, otherwise `C:\Games\AzerothSurvivors\AzerothSurvivors.exe` |
 | Save game | `%APPDATA%\wenilla-rogue\` (`Saves\*.sav`, `characters.txt`, `characters.before-import.txt`, `language.txt`) |
-| Game config | `<game folder>\benilla-config\` (`AddOns\`, `saved\`, `config.toml`, `layout\`, `chat\`, `camera\`, `cache\`) |
+| Game config | setting, otherwise `<game folder>\benilla-config\` if it exists, otherwise `C:\Git\wenilla\benilla-config` (contains `AddOns\`, `saved\`, `config.toml`, `layout\`, `chat\`, `camera\`, `cache\`) |
 | Sync folder | the folder containing `AzerothSync.exe`, if it already holds `manifest.json` or `data\`; otherwise must be chosen |
 | Per PC settings | `%LOCALAPPDATA%\AzerothSync\settings.ini` (keys `GamePath`, `CloudDir`, `SaveDir`, `ConfigDir`) |
 | Per PC sync memory | `%LOCALAPPDATA%\AzerothSync\state.json` |
