@@ -16,9 +16,10 @@ if (-not (Test-Path $ico) -and (Test-Path $game)) {
 $out = Join-Path $here 'AzerothSync.exe'
 $iconArg = if (Test-Path $ico) { "/win32icon:$ico" } else { $null }
 & $csc /nologo /target:winexe /optimize+ /codepage:65001 "/out:$out" $iconArg `
+    "/win32manifest:$(Join-Path $here 'src\app.manifest')" `
     /r:System.Web.Extensions.dll /r:System.IO.Compression.dll /r:System.IO.Compression.FileSystem.dll `
-    /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:Microsoft.CSharp.dll /r:System.Core.dll `
-    (Join-Path $here 'src\Engine.cs') (Join-Path $here 'src\App.cs')
+    /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Core.dll `
+    (Join-Path $here 'src\AssemblyInfo.cs') (Join-Path $here 'src\Engine.cs') (Join-Path $here 'src\App.cs')
 if ($LASTEXITCODE -ne 0) { throw 'Build failed' }
 Write-Host "Built: $out"
 if ($DeployTo) {

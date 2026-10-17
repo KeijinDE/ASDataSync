@@ -5,6 +5,10 @@
 * A saved game config folder that no longer exists falls back to
   `benilla-config` in the game folder or `C:\Git\wenilla\benilla-config`,
   whichever exists.
+* Windows file details (version, product, publisher, license) and an
+  application manifest (`asInvoker`, never asks for administrator rights).
+* Desktop shortcut created through the native Shell API instead of
+  Windows Script Host.
 
 ## 1.1.0
 

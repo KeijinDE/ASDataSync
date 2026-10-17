@@ -5,6 +5,8 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading;
 using System.Windows.Forms;
 
@@ -204,18 +206,44 @@ namespace AzerothSync
             try
             {
                 string lnk = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "Azeroth Survivors (Sync).lnk");
-                Type shellType = Type.GetTypeFromProgID("WScript.Shell");
-                dynamic shell = Activator.CreateInstance(shellType);
-                dynamic sc = shell.CreateShortcut(lnk);
-                sc.TargetPath = Application.ExecutablePath;
-                sc.Arguments = "--play";
-                sc.WorkingDirectory = Path.GetDirectoryName(Application.ExecutablePath);
-                sc.IconLocation = (File.Exists(settings.GamePath) ? settings.GamePath : Application.ExecutablePath) + ",0";
-                sc.Save();
+                var link = (IShellLinkW)new ShellLink();
+                link.SetPath(Application.ExecutablePath);
+                link.SetArguments("--play");
+                link.SetWorkingDirectory(Path.GetDirectoryName(Application.ExecutablePath));
+                link.SetIconLocation(File.Exists(settings.GamePath) ? settings.GamePath : Application.ExecutablePath, 0);
+                link.SetDescription("Sync, play Azeroth Survivors, sync again");
+                ((System.Runtime.InteropServices.ComTypes.IPersistFile)link).Save(lnk, true);
                 Write("Shortcut created: " + lnk, Level.Good);
             }
             catch (Exception ex) { Write("Could not create the shortcut: " + ex.Message, Level.Error); }
         }
+    }
+
+    // Windows shell link (.lnk) through the native Shell API
+    [ComImport, Guid("00021401-0000-0000-C000-000000000046")]
+    class ShellLink { }
+
+    [ComImport, InterfaceType(ComInterfaceType.InterfaceIsIUnknown), Guid("000214F9-0000-0000-C000-000000000046")]
+    interface IShellLinkW
+    {
+        void GetPath([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszFile, int cch, IntPtr pfd, uint fFlags);
+        void GetIDList(out IntPtr ppidl);
+        void SetIDList(IntPtr pidl);
+        void GetDescription([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszName, int cch);
+        void SetDescription([MarshalAs(UnmanagedType.LPWStr)] string pszName);
+        void GetWorkingDirectory([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszDir, int cch);
+        void SetWorkingDirectory([MarshalAs(UnmanagedType.LPWStr)] string pszDir);
+        void GetArguments([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszArgs, int cch);
+        void SetArguments([MarshalAs(UnmanagedType.LPWStr)] string pszArgs);
+        void GetHotkey(out short pwHotkey);
+        void SetHotkey(short wHotkey);
+        void GetShowCmd(out int piShowCmd);
+        void SetShowCmd(int iShowCmd);
+        void GetIconLocation([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszIconPath, int cch, out int piIcon);
+        void SetIconLocation([MarshalAs(UnmanagedType.LPWStr)] string pszIconPath, int iIcon);
+        void SetRelativePath([MarshalAs(UnmanagedType.LPWStr)] string pszPathRel, uint dwReserved);
+        void Resolve(IntPtr hwnd, uint fFlags);
+        void SetPath([MarshalAs(UnmanagedType.LPWStr)] string pszFile);
     }
 
     // One question for all areas in conflict
