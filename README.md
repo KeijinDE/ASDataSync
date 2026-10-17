@@ -7,6 +7,8 @@ keeps in sync between your computers.
 
 > Unofficial fan tool. Not affiliated with the developers of Azeroth Survivors.
 
+![AzerothSync window](docs/screenshot.png)
+
 ## What it does
 
 * **Play** button (or desktop shortcut): downloads the newest state from the
