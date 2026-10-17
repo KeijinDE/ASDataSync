@@ -19,8 +19,11 @@ keeps in sync between your computers.
   | Area | Local folder | In the sync folder |
   |---|---|---|
   | Save game | `%APPDATA%\wenilla-rogue` (without `language.txt`) | `data\save` |
-  | AddOns | `<game folder>\benilla-config\AddOns` | `data\addons` |
-  | Addon settings | `<game folder>\benilla-config\saved` | `data\saved` |
+  | AddOns | `<game config folder>\AddOns` | `data\addons` |
+  | Addon settings | `<game config folder>\saved` | `data\saved` |
+
+  The game config folder is the game's `benilla-config` folder, see
+  [How paths are found](#how-paths-are-found).
 
 * Backs up whatever it overwrites as a ZIP file, locally and in the cloud.
 * Asks **one** question if both sides changed, never one per file or area.
@@ -59,6 +62,17 @@ sync folder is found automatically and you choose the game once.
 
 Settings are stored per PC in `%LOCALAPPDATA%\AzerothSync\settings.ini`.
 
+## How paths are found
+
+| Path | How AzerothSync finds it |
+|---|---|
+| Game | `AzerothSurvivors.exe` next to `AzerothSync.exe` always wins. Otherwise the saved setting, otherwise `C:\Games\AzerothSurvivors\AzerothSurvivors.exe`. |
+| Sync folder | The saved setting. If none is saved and `AzerothSync.exe` sits in a folder that already contains synced data (`manifest.json` or `data\`), that folder. Otherwise you choose it. |
+| Save game folder | The saved setting, otherwise `%APPDATA%\wenilla-rogue`. |
+| Game config folder | The saved setting if the folder exists. Otherwise `benilla-config` in the game folder, otherwise `C:\Git\wenilla\benilla-config`. If none of them exists, choose it, or AddOns and addon settings are skipped. |
+
+Everything you change in the window is saved for this PC only.
+
 ## Buttons
 
 | Button | What happens |
@@ -84,6 +98,25 @@ Backups:
 * Cloud backups before an upload: `<sync folder>\history\` (last 10 per area)
 
 To restore, unzip a backup into the matching folder.
+
+## Antivirus and SmartScreen
+
+AzerothSync is a small, new and unsigned program, which some scanners
+distrust on principle. Being open about it:
+
+* [VirusTotal scan of v1.1.1](https://www.virustotal.com/gui/file/5083a8826b6b44d80ab43fd6b9d6b6237f1765d99666e40c3f2ef41ccaa2c946):
+  **2 of 70** scanners that analysed it flag it, **SecureAge APEX** ("Malicious") and **Trapmine**
+  ("Suspicious.low.ml.score"). Both are verdicts from machine learning models,
+  not a match for known malware. All other scanners, including Microsoft
+  Defender, find nothing.
+* Windows SmartScreen may show "Windows protected your PC" on the first start,
+  because the exe has no code signature. Click **More info**, then **Run anyway**.
+
+What the program does is fully visible in [`src/`](src): it reads and copies
+files in the folders listed above, writes ZIP backups, starts the game and
+creates a desktop shortcut on request. No network access of its own, no
+installation, no administrator rights. If you prefer, build the exe yourself
+from the source (see [Building](#building)).
 
 ## Troubleshooting
 
