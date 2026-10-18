@@ -25,12 +25,14 @@ namespace AzerothSync
 
     class MainForm : Form
     {
-        public const string Version = "1.1.1";
+        public const string Version = "1.2.0";
         readonly bool autoPlay;
         Settings settings;
         TextBox tbGame, tbCloud, tbSave, tbConfig;
         Button btnPlay, btnPull, btnPush, btnStatus, btnShortcut;
         RichTextBox log;
+        ProgressBar progress;
+        Label progressText;
         bool busy;
 
         public MainForm(bool autoPlay)
@@ -44,7 +46,8 @@ namespace AzerothSync
             StartPosition = FormStartPosition.CenterScreen;
             try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
 
-            var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Padding = new Padding(10) };
+            var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4, Padding = new Padding(10) };
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
@@ -75,6 +78,14 @@ namespace AzerothSync
             btnShortcut = MakeButton("Desktop shortcut", "Creates \"Azeroth Survivors (Sync)\" on the desktop, which runs Play directly", delegate { CreateShortcut(); });
             buttons.Controls.AddRange(new Control[] { btnPlay, btnPull, btnPush, btnStatus, btnShortcut });
             root.Controls.Add(buttons);
+
+            var progressPanel = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, Margin = new Padding(0, 0, 0, 8) };
+            progressText = new Label { AutoSize = true, Text = " ", Margin = new Padding(0, 0, 0, 3) };
+            progress = new ProgressBar { Dock = DockStyle.Top, Height = 16, Minimum = 0, Maximum = 100, Style = ProgressBarStyle.Continuous };
+            progressPanel.Controls.Add(progressText);
+            progressPanel.Controls.Add(progress);
+            root.Controls.Add(progressPanel);
+            ShowProgress("", -1);
 
             log = new RichTextBox { Dock = DockStyle.Fill, ReadOnly = true, BackColor = Color.FromArgb(24, 24, 28), ForeColor = Color.Gainsboro, Font = new Font("Consolas", 9.5f), BorderStyle = BorderStyle.None };
             root.Controls.Add(log);
@@ -161,6 +172,15 @@ namespace AzerothSync
             log.ScrollToCaret();
         }
 
+        // percent -1: keep the space, but show an empty bar and no text
+        void ShowProgress(string text, int percent)
+        {
+            if (InvokeRequired) { BeginInvoke(new Action<string, int>(ShowProgress), text, percent); return; }
+            progressText.Text = percent < 0 ? "Ready" : text;
+            progressText.ForeColor = percent < 0 ? SystemColors.GrayText : SystemColors.ControlText;
+            progress.Value = Math.Max(0, Math.Min(100, percent));
+        }
+
         void SetBusy(bool on)
         {
             busy = on;
@@ -175,6 +195,7 @@ namespace AzerothSync
             SaveSettings();
             var engine = new Engine(settings);
             engine.Log = Write;
+            engine.Progress = ShowProgress;
             engine.Confirm = q => (bool)Invoke(new Func<bool>(() =>
                 MessageBox.Show(this, q, "AzerothSync", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes));
             engine.AskConflict = (sets, pulling) => (Choice)Invoke(new Func<Choice>(() => ConflictDialog.Ask(this, engine, sets, pulling)));
@@ -188,6 +209,7 @@ namespace AzerothSync
                 BeginInvoke(new Action(() =>
                 {
                     SetBusy(false);
+                    ShowProgress("", -1);
                     if (autoPlay && ok)
                     {
                         Write("Done, closing in a moment.", Level.Dim);

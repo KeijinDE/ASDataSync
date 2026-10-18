@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.0
+
+* Progress bar with files and MB for checking, downloading and uploading.
+  The cloud drive fetches files while they are read, so the download
+  progress reflects the real transfer.
+* Copied files keep their original modification time.
+
 ## 1.1.1
 
 * A saved game config folder that no longer exists falls back to

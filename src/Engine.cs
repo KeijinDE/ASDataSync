@@ -123,6 +123,31 @@ namespace AzerothSync
     class FileEntry
     {
         public string Rel, Full;
+        public long Length;
+    }
+
+    // Read only stream wrapper that reports every chunk read, for progress
+    class ProgressStream : Stream
+    {
+        readonly Stream inner;
+        readonly Action<long> onRead;
+        public ProgressStream(Stream inner, Action<long> onRead) { this.inner = inner; this.onRead = onRead; }
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            int n = inner.Read(buffer, offset, count);
+            if (n > 0) onRead(n);
+            return n;
+        }
+        public override bool CanRead { get { return true; } }
+        public override bool CanSeek { get { return false; } }
+        public override bool CanWrite { get { return false; } }
+        public override long Length { get { return inner.Length; } }
+        public override long Position { get { return inner.Position; } set { throw new NotSupportedException(); } }
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) { throw new NotSupportedException(); }
+        public override void SetLength(long value) { throw new NotSupportedException(); }
+        public override void Write(byte[] buffer, int offset, int count) { throw new NotSupportedException(); }
+        protected override void Dispose(bool disposing) { if (disposing) inner.Dispose(); base.Dispose(disposing); }
     }
 
     public class Engine
@@ -136,6 +161,13 @@ namespace AzerothSync
         // One question for all areas in conflict
         public Func<List<SyncSet>, bool, Choice> AskConflict = delegate { return Choice.Abort; };
         public Func<string, bool> Confirm = delegate { return false; };
+        // Progress text and percent; percent -1 hides the progress display
+        public Action<string, int> Progress = delegate { };
+
+        string pLabel;
+        long pDone, pTotal;
+        int pFiles, pFilesTotal, pLastPct;
+        DateTime pLastReport;
 
         string CloudData { get { return Path.Combine(S.CloudDir, "data"); } }
         string CloudHistory { get { return Path.Combine(S.CloudDir, "history"); } }
@@ -163,9 +195,52 @@ namespace AzerothSync
             foreach (string f in Directory.GetFiles(root, "*", SearchOption.AllDirectories))
             {
                 string rel = f.Substring(root.Length + 1);
-                if (!exclude.Contains(rel, StringComparer.OrdinalIgnoreCase)) list.Add(new FileEntry { Rel = rel, Full = f });
+                if (!exclude.Contains(rel, StringComparer.OrdinalIgnoreCase)) list.Add(new FileEntry { Rel = rel, Full = f, Length = new FileInfo(f).Length });
             }
             return list;
+        }
+
+        // ---------- Progress ----------
+
+        void BeginProgress(string label, IEnumerable<FileEntry> files)
+        {
+            var list = files.ToList();
+            pLabel = label;
+            pTotal = list.Sum(f => f.Length);
+            pFilesTotal = list.Count;
+            pDone = 0; pFiles = 0; pLastPct = -1;
+            pLastReport = DateTime.MinValue;
+            ReportProgress(true);
+        }
+
+        public void EndProgress() { Progress("", -1); }
+
+        void AddBytes(long n) { pDone += n; ReportProgress(false); }
+
+        void FileDone() { pFiles++; ReportProgress(false); }
+
+        static string Mb(long b) { return (b / 1048576.0).ToString("0.0", CultureInfo.InvariantCulture) + " MB"; }
+
+        void ReportProgress(bool force)
+        {
+            int pct = pTotal > 0 ? (int)Math.Min(100, pDone * 100 / pTotal) : (pFilesTotal > 0 ? pFiles * 100 / pFilesTotal : 100);
+            // Throttle: a new percent at most every 50 ms, the end always
+            bool last = pFiles >= pFilesTotal;
+            if (!force && !last && (pct == pLastPct || (DateTime.Now - pLastReport).TotalMilliseconds < 50)) return;
+            pLastPct = pct;
+            pLastReport = DateTime.Now;
+            Progress(pLabel + ": " + Math.Min(pFiles, pFilesTotal) + " of " + pFilesTotal + " files, " + Mb(Math.Min(pDone, pTotal)) + " of " + Mb(pTotal), pct);
+        }
+
+        Stream OpenRead(string path)
+        {
+            return new ProgressStream(new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 16), AddBytes);
+        }
+
+        // Files of all areas on both sides, for the checking step
+        IEnumerable<FileEntry> AllFiles(IEnumerable<SyncSet> sets)
+        {
+            return sets.SelectMany(s => Files(s.Dir, s.Exclude).Concat(Files(s.Cloud, s.Exclude)));
         }
 
         static string Hex(byte[] b)
@@ -174,7 +249,7 @@ namespace AzerothSync
         }
 
         // Same as Get-TreeHash in the script: lines "path:HASH", sorted like Sort-Object (culture, case insensitive)
-        public static string TreeHash(string dir, string[] exclude)
+        string TreeHash(string dir, string[] exclude)
         {
             if (!Directory.Exists(dir)) return None;
             var files = Files(dir, exclude);
@@ -183,8 +258,11 @@ namespace AzerothSync
             using (var sha = SHA256.Create())
             {
                 foreach (var f in files)
-                    using (var st = File.OpenRead(f.Full))
+                {
+                    using (var st = OpenRead(f.Full))
                         lines.Add(f.Rel.ToLower() + ":" + Hex(sha.ComputeHash(st)));
+                    FileDone();
+                }
                 lines.Sort(StringComparer.Create(CultureInfo.CurrentCulture, true));
                 return Hex(sha.ComputeHash(Encoding.UTF8.GetBytes(string.Join("\n", lines))));
             }
@@ -200,7 +278,7 @@ namespace AzerothSync
         }
 
         // Make the target an exact copy of the source (excluded files stay untouched)
-        static void Mirror(string src, string dst, string[] exclude)
+        void Mirror(string src, string dst, string[] exclude)
         {
             Directory.CreateDirectory(dst);
             var srcFiles = Files(src, exclude);
@@ -214,7 +292,11 @@ namespace AzerothSync
                 string target = Path.Combine(dst, f.Rel);
                 Directory.CreateDirectory(Path.GetDirectoryName(target));
                 if (File.Exists(target)) File.SetAttributes(target, FileAttributes.Normal);
-                File.Copy(f.Full, target, true);
+                using (var input = OpenRead(f.Full))
+                using (var output = new FileStream(target, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 16))
+                    input.CopyTo(output, 1 << 16);
+                File.SetLastWriteTimeUtc(target, File.GetLastWriteTimeUtc(f.Full));
+                FileDone();
             }
         }
 
@@ -226,7 +308,15 @@ namespace AzerothSync
             string zip = Path.Combine(backupDir, prefix + "_" + DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss") + ".zip");
             if (File.Exists(zip)) File.Delete(zip);
             using (var a = ZipFile.Open(zip, ZipArchiveMode.Create))
-                foreach (var f in files) a.CreateEntryFromFile(f.Full, f.Rel.Replace('\\', '/'));
+                foreach (var f in files)
+                {
+                    var entry = a.CreateEntry(f.Rel.Replace('\\', '/'));
+                    entry.LastWriteTime = File.GetLastWriteTime(f.Full);
+                    using (var input = OpenRead(f.Full))
+                    using (var output = entry.Open())
+                        input.CopyTo(output, 1 << 16);
+                    FileDone();
+                }
             foreach (string old in Directory.GetFiles(backupDir, prefix + "_*.zip").OrderByDescending(x => x).Skip(keep))
                 File.Delete(old);
             Log("    Backup: " + zip, Level.Dim);
@@ -326,6 +416,7 @@ namespace AzerothSync
             Log("Sync folder: " + S.CloudDir, Level.Info);
             Log("  " + CloudInfo(), Level.Dim);
             var state = LoadState();
+            BeginProgress("Checking files", AllFiles(Sets.Where(s => Available(s, false))));
             foreach (var set in Sets)
             {
                 if (!Available(set, true)) continue;
@@ -339,6 +430,7 @@ namespace AzerothSync
                 else text = "both changed or never synced";
                 Log("  " + set.Label + ": " + text + " (local " + Newest(set.Dir, set.Exclude) + ", cloud " + Newest(set.Cloud, set.Exclude) + ")", lv);
             }
+            EndProgress();
         }
 
         // ---------- Download ----------
@@ -353,6 +445,7 @@ namespace AzerothSync
             var take = new List<SyncSet>();
             var conflicts = new List<SyncSet>();
             var cloudHash = new Dictionary<string, string>();
+            BeginProgress("Checking files", AllFiles(Sets.Where(s => Available(s, false))));
             foreach (var set in Sets)
             {
                 if (!Available(set, true)) continue;
@@ -391,6 +484,8 @@ namespace AzerothSync
                         return false;
                 }
             }
+            // Backup of the local side plus copy of the cloud side
+            BeginProgress("Downloading", AllFiles(take));
             foreach (var set in take)
             {
                 Backup(set.Dir, set.Exclude, Path.Combine(S.StateDir, "backups"), set.Name, KeepLocalBackups);
@@ -398,6 +493,7 @@ namespace AzerothSync
                 SetLastHash(set.Name, cloudHash[set.Name]);
                 Log("  " + set.Label + ": downloaded from the cloud.", Level.Good);
             }
+            EndProgress();
             if (take.Count > 0) Log("  Cloud state: " + CloudInfo(), Level.Dim);
             return true;
         }
@@ -413,6 +509,7 @@ namespace AzerothSync
             var upload = new List<SyncSet>();
             var conflicts = new List<SyncSet>();
             var localHash = new Dictionary<string, string>();
+            BeginProgress("Checking files", AllFiles(Sets.Where(s => Available(s, false))));
             foreach (var set in Sets)
             {
                 if (!Available(set, true)) continue;
@@ -446,6 +543,8 @@ namespace AzerothSync
                         return false;
                 }
             }
+            // Backup of the cloud side plus copy of the local side
+            BeginProgress("Uploading", AllFiles(upload));
             foreach (var set in upload)
             {
                 Backup(set.Cloud, set.Exclude, CloudHistory, set.Name, KeepCloudBackups);
@@ -453,6 +552,7 @@ namespace AzerothSync
                 SetLastHash(set.Name, localHash[set.Name]);
                 Log("  " + set.Label + ": uploaded.", Level.Good);
             }
+            EndProgress();
             if (upload.Count > 0)
             {
                 var m = new Dictionary<string, object> { { "Device", Environment.MachineName }, { "Time", DateTime.Now.ToString("o") } };
@@ -468,6 +568,7 @@ namespace AzerothSync
             if (!File.Exists(S.GamePath)) throw new Exception("Game not found: " + S.GamePath);
             if (GameRunning()) throw new Exception("The game is already running.");
             if (!Pull(false) && !Confirm("The sync was cancelled.\nPlay with your local state anyway?")) return;
+            EndProgress();
             Log("Starting Azeroth Survivors ...", Level.Info);
             var p = Process.Start(new ProcessStartInfo(S.GamePath) { WorkingDirectory = Path.GetDirectoryName(S.GamePath), UseShellExecute = false });
             p.WaitForExit();
