@@ -23,7 +23,8 @@ GZip or Brotli).
 | File | Purpose |
 |---|---|
 | `src/Engine.cs` | All sync logic, no UI (settings, hashing, mirroring, backups, conflicts) |
-| `src/App.cs` | WinForms window, conflict dialog, `--play` mode, desktop shortcut |
+| `src/App.cs` | Window logic, conflict dialog, `--play` mode, desktop shortcut, log file |
+| `src/Theme.cs`, `src/Look.cs` | Look since 1.4.0 (see `docs/DESIGN.md`), design preview mode |
 | `build.ps1` | Compiles with `C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe` (C# 5, .NET Framework 4.x). Optional `-DeployTo <folder>` |
 | `AzerothSync.exe` | Build output, about 35 KB, no installation |
 

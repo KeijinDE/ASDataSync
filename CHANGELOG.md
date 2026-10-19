@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.4.0
+
+* New look: dark window with bronze outlines and gold accents, a navigation
+  with Play & Sync, Paths and Log, a clear Play button and a list of the three
+  data areas with their state. Designed with Codex, see `docs/DESIGN.md`.
+* Dialogs in the same style; Enter and Escape always mean Cancel or No.
+* Link to the GitHub page in the window.
+* Sync behaviour unchanged from 1.3.0.
+
 ## 1.3.0
 
 Safety release, based on an external code review.

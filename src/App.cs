@@ -33,77 +33,32 @@ namespace AzerothSync
         }
     }
 
-    class MainForm : Form
+    partial class MainForm : Form
     {
-        public const string Version = "1.3.0";
+        public const string Version = "1.4.0";
         readonly bool autoPlay;
         Settings settings;
-        GroupBox settingsGroup;
+        Control settingsGroup;
         TextBox tbGame, tbCloud, tbSave, tbConfig;
         Button btnPlay, btnPull, btnPush, btnStatus, btnShortcut;
         RichTextBox log;
-        ProgressBar progress;
+        BronzeProgress progress;
         Label progressText;
         bool busy;
 
-        public MainForm(bool autoPlay)
+        public MainForm(bool autoPlay) : this(autoPlay, false) { }
+
+        public MainForm(bool autoPlay, bool designPreview)
         {
+            this.designPreview = designPreview;
             this.autoPlay = autoPlay;
-            settings = Settings.Load(Settings.DefaultStateDir(), Path.GetDirectoryName(Application.ExecutablePath));
-            Text = "AzerothSync " + Version;
-            Font = new Font("Segoe UI", 9f);
-            ClientSize = new Size(720, 560);
-            MinimumSize = new Size(560, 460);
-            StartPosition = FormStartPosition.CenterScreen;
-            try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
-
-            var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4, Padding = new Padding(10) };
-            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            Controls.Add(root);
-
-            var group = new GroupBox { Text = "Settings (this device only)", Dock = DockStyle.Top, AutoSize = true, Padding = new Padding(8) };
-            var grid = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, AutoSize = true };
-            grid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            grid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            tbGame = AddRow(grid, "Game (AzerothSurvivors.exe)", settings.GamePath, true,
-                "The game executable. Used to start the game and to detect whether it is running.");
-            tbCloud = AddRow(grid, "Sync folder (cloud)", settings.CloudDir, false,
-                "A folder that your cloud drive (Google Drive, OneDrive, Dropbox, ...) keeps in sync between your PCs.");
-            tbSave = AddRow(grid, "Save game folder", settings.SaveDir, false,
-                "Usually %APPDATA%\\wenilla-rogue");
-            tbConfig = AddRow(grid, "Game config folder", settings.ConfigDir, false,
-                "The benilla-config folder that contains AddOns and saved. Taken from next to the game if it exists there, otherwise " + Settings.FallbackConfigDir + ".");
-            group.Controls.Add(grid);
-            root.Controls.Add(group);
-            settingsGroup = group;
-
-            var buttons = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, Padding = new Padding(0, 8, 0, 8) };
-            btnPlay = MakeButton("Play", "Download, start the game, upload after it closes", delegate { Run(e => e.Play()); });
-            btnPlay.Font = new Font(Font, FontStyle.Bold);
-            btnPull = MakeButton("Download", "Replace your local data with the cloud state (one confirmation)", delegate { Run(e => e.Pull(true)); });
-            btnPush = MakeButton("Upload", "Replace the cloud state with your local data (one confirmation)", delegate { Run(e => e.Push(true)); });
-            btnStatus = MakeButton("Status", "Shows which side is newer", delegate { Run(e => e.Status()); });
-            btnShortcut = MakeButton("Desktop shortcut", "Creates \"Azeroth Survivors (Sync)\" on the desktop, which runs Play directly", delegate { CreateShortcut(); });
-            buttons.Controls.AddRange(new Control[] { btnPlay, btnPull, btnPush, btnStatus, btnShortcut });
-            root.Controls.Add(buttons);
-
-            var progressPanel = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, Margin = new Padding(0, 0, 0, 8) };
-            progressText = new Label { AutoSize = true, Text = " ", Margin = new Padding(0, 0, 0, 3) };
-            progress = new ProgressBar { Dock = DockStyle.Top, Height = 16, Minimum = 0, Maximum = 100, Style = ProgressBarStyle.Continuous };
-            progressPanel.Controls.Add(progressText);
-            progressPanel.Controls.Add(progress);
-            root.Controls.Add(progressPanel);
-            ShowProgress("", -1);
-
-            log = new RichTextBox { Dock = DockStyle.Fill, ReadOnly = true, BackColor = Color.FromArgb(24, 24, 28), ForeColor = Color.Gainsboro, Font = new Font("Consolas", 9.5f), BorderStyle = BorderStyle.None };
-            root.Controls.Add(log);
+            settings = designPreview ? SampleSettings() : Settings.Load(Settings.DefaultStateDir(), Path.GetDirectoryName(Application.ExecutablePath));
+            BuildWindow();
 
             Shown += delegate
             {
+                Theme.DarkChrome(this);
+                if (designPreview) { ShowSampleState(); return; }
                 if (autoPlay) Run(e => e.Play());
                 else
                 {
@@ -125,14 +80,15 @@ namespace AzerothSync
         {
             int row = grid.RowCount++;
             var l = new Label { Text = label, AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(0, 6, 8, 0) };
-            new ToolTip().SetToolTip(l, tip);
+            lookTips.SetToolTip(l, tip);
             grid.Controls.Add(l, 0, row);
             var tb = new TextBox { Text = value, Dock = DockStyle.Fill };
             tb.Leave += delegate { SaveSettings(); };
             grid.Controls.Add(tb, 1, row);
-            var b = new Button { Text = "...", Width = 32, Height = tb.Height + 2 };
+            var b = new BronzeButton { Text = "…", Width = 38, Height = 30, AccessibleName = "Choose " + label };
             b.Click += delegate
             {
+                if (designPreview) return;
                 if (file)
                 {
                     using (var d = new OpenFileDialog { Filter = "Program (*.exe)|*.exe", FileName = tb.Text })
@@ -154,14 +110,15 @@ namespace AzerothSync
 
         Button MakeButton(string text, string tip, EventHandler click)
         {
-            var b = new Button { Text = text, AutoSize = true, Padding = new Padding(8, 3, 8, 3), Margin = new Padding(0, 0, 8, 0) };
-            new ToolTip().SetToolTip(b, tip);
+            var b = new BronzeButton { Text = text, Width = 158, Height = 38, Margin = new Padding(0, 0, 9, 0) };
+            lookTips.SetToolTip(b, tip);
             b.Click += click;
             return b;
         }
 
         void SaveSettings()
         {
+            if (designPreview || busy) return;
             settings.GamePath = tbGame.Text.Trim();
             settings.CloudDir = tbCloud.Text.Trim();
             settings.SaveDir = tbSave.Text.Trim();
@@ -172,22 +129,26 @@ namespace AzerothSync
         void Write(string text, Level level)
         {
             if (InvokeRequired) { BeginInvoke(new Action<string, Level>(Write), text, level); return; }
-            Color c = Color.Gainsboro;
-            if (level == Level.Good) c = Color.FromArgb(120, 220, 120);
-            else if (level == Level.Warn) c = Color.FromArgb(240, 200, 90);
-            else if (level == Level.Error) c = Color.FromArgb(255, 110, 110);
-            else if (level == Level.Dim) c = Color.Gray;
-            else if (text.EndsWith("...")) c = Color.FromArgb(110, 190, 255);
+            Color c = Theme.Text;
+            if (level == Level.Good) c = Theme.Good;
+            else if (level == Level.Warn) c = Theme.Warning;
+            else if (level == Level.Error) c = Theme.Error;
+            else if (level == Level.Dim) c = Theme.Muted;
+            else if (text.EndsWith("...")) c = Theme.Gold;
             log.SelectionStart = log.TextLength;
             log.SelectionColor = c;
             log.AppendText(text + "\n");
             log.ScrollToCaret();
+            UpdateAreaState(text, level);
+            if (text.StartsWith("Starting Azeroth Survivors")) progressText.Text = "Game running · sync follows after you close it";
+            else if (text == "Game closed.") progressText.Text = "Game closed · saving your progress";
             if (text.Length > 0) FileLog(level.ToString().ToUpperInvariant() + " " + text.Trim());
         }
 
         // Local diagnosis log, about 1 MB, the previous one is kept as log.old.txt
         void FileLog(string line)
         {
+            if (designPreview) return;
             try
             {
                 string dir = settings.StateDir, file = Path.Combine(dir, "log.txt");
@@ -207,8 +168,8 @@ namespace AzerothSync
         void ShowProgress(string text, int percent)
         {
             if (InvokeRequired) { BeginInvoke(new Action<string, int>(ShowProgress), text, percent); return; }
-            progressText.Text = percent < 0 ? "Ready" : text;
-            progressText.ForeColor = percent < 0 ? SystemColors.GrayText : SystemColors.ControlText;
+            progressText.Text = percent < 0 ? "Ready" : TranslateProgress(text);
+            progressText.ForeColor = percent < 0 ? Theme.Muted : Theme.Text;
             progress.Value = Math.Max(0, Math.Min(100, percent));
         }
 
@@ -217,20 +178,20 @@ namespace AzerothSync
             busy = on;
             foreach (var b in new[] { btnPlay, btnPull, btnPush, btnStatus, btnShortcut }) b.Enabled = !on;
             settingsGroup.Enabled = !on;
-            UseWaitCursor = on;
         }
 
         // work returns true only if everything it should do was done
         void Run(Func<Engine, bool> work)
         {
             if (busy) return;
+            if (designPreview) { AnimateSample(); return; }
             SaveSettings();
             // The running sync gets its own copy of the settings
             var engine = new Engine(settings.Clone());
             engine.Log = Write;
             engine.Progress = ShowProgress;
             engine.Confirm = q => (bool)Invoke(new Func<bool>(() =>
-                MessageBox.Show(this, q, "AzerothSync", MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) == DialogResult.Yes));
+                ThemedDialog.Ask(this, "Confirm change", TranslateQuestion(q), false) == Choice.Local));
             engine.AskConflict = (sets, pulling) => (Choice)Invoke(new Func<Choice>(() => ConflictDialog.Ask(this, engine, sets, pulling)));
             SetBusy(true);
             Write("", Level.Info);
@@ -247,6 +208,8 @@ namespace AzerothSync
                 {
                     SetBusy(false);
                     ShowProgress("", -1);
+                    progressText.Text = ok ? "Done" : "Sync not complete · see Log";
+                    progressText.ForeColor = ok ? Theme.Good : Theme.Warning;
                     if (autoPlay && !ok)
                         Write("Not everything was synced, see above. The window stays open. Fix the cause, then use Upload or Download.", Level.Warn);
                     if (autoPlay && ok)
@@ -264,6 +227,7 @@ namespace AzerothSync
 
         void CreateShortcut()
         {
+            if (designPreview) return;
             try
             {
                 string lnk = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "Azeroth Survivors (Sync).lnk");
@@ -312,44 +276,15 @@ namespace AzerothSync
     {
         public static Choice Ask(IWin32Window owner, Engine engine, List<SyncSet> sets, bool pulling)
         {
-            var f = new Form
-            {
-                Text = "AzerothSync: conflict",
-                FormBorderStyle = FormBorderStyle.FixedDialog,
-                StartPosition = FormStartPosition.CenterParent,
-                MinimizeBox = false, MaximizeBox = false,
-                AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
-                Font = new Font("Segoe UI", 9f), Padding = new Padding(12)
-            };
-            var lines = new List<string> { "Both your local data and the cloud changed since the last sync:", "" };
-            foreach (var s in sets)
-                lines.Add("• " + s.Label + ": local " + Engine.Newest(s.Dir, s.Exclude) + ", cloud " + Engine.Newest(s.Cloud, s.Exclude));
+            var lines = new List<string> { "Your local data and the cloud both changed since the last sync.", "" };
+            foreach (var set in sets)
+                lines.Add(set.Label +
+                    " · local " + Engine.Newest(set.Dir, set.Exclude) + " · cloud " + Engine.Newest(set.Cloud, set.Exclude));
             lines.Add("");
-            lines.Add("Cloud: " + engine.CloudInfo());
+            lines.Add(engine.CloudInfo());
             lines.Add("");
-            lines.Add("Your choice applies to all areas listed. The overwritten state is backed up first.");
-            var text = new Label { Text = string.Join("\n", lines), AutoSize = true, MaximumSize = new Size(520, 0), Margin = new Padding(0, 0, 0, 12) };
-            var panel = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Bottom, FlowDirection = FlowDirection.LeftToRight };
-            Choice result = Choice.Abort;
-            Func<string, Choice, Button> mk = (t, c) =>
-            {
-                var b = new Button { Text = t, AutoSize = true, Padding = new Padding(8, 3, 8, 3) };
-                b.Click += delegate { result = c; f.Close(); };
-                panel.Controls.Add(b);
-                return b;
-            };
-            var bCloud = mk("Use cloud", Choice.Cloud);
-            var bLocal = mk("Keep local", Choice.Local);
-            var bAbort = mk("Cancel", Choice.Abort);
-            // Enter never overwrites anything
-            f.AcceptButton = bAbort;
-            f.CancelButton = bAbort;
-            var layout = new TableLayoutPanel { AutoSize = true, ColumnCount = 1, Dock = DockStyle.Fill };
-            layout.Controls.Add(text);
-            layout.Controls.Add(panel);
-            f.Controls.Add(layout);
-            f.ShowDialog(owner);
-            return result;
+            lines.Add("Your choice applies to all areas listed.\nThe replaced state is backed up first.");
+            return ThemedDialog.Ask(owner, "Which state do you want to keep?", string.Join("\n", lines), true);
         }
     }
 }

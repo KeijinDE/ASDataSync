@@ -7,7 +7,7 @@ keeps in sync between your computers.
 
 > Unofficial fan tool. Not affiliated with the developers of Azeroth Survivors.
 
-![AzerothSync window](docs/screenshot.png)
+![AzerothSync window with sample data](docs/screenshot.png)
 
 ## What it does
 
@@ -41,8 +41,8 @@ state always wins. Do not play on two PCs at the same time.
 1. Download `AzerothSync.exe` from the [releases](../../releases) and put it
    **into your game folder**, next to `AzerothSurvivors.exe`. It then finds
    the game by itself.
-2. Start `AzerothSync.exe` and check the four paths at the top. Use `...` to
-   change them:
+2. Start `AzerothSync.exe`, open **Paths** on the left and check the four
+   folders. Use `...` to change them:
    * **Game**: found automatically when AzerothSync sits in the game folder
    * **Sync folder**: choose a folder inside your cloud drive, for example
      `Google Drive\AzerothSync`
@@ -50,8 +50,8 @@ state always wins. Do not play on two PCs at the same time.
    * **Game config folder**: the `benilla-config` folder with `AddOns` and
      `saved`. Taken from the game folder if it is there, otherwise
      `C:\Git\wenilla\benilla-config` is suggested. Check it once.
-3. Click **Upload** on the PC that has your current progress.
-4. Click **Desktop shortcut**. From now on start the game with
+3. Under **Play & Sync**, click **Upload** on the PC that has your current progress.
+4. Under **Paths**, click **Desktop shortcut**. From now on start the game with
    *Azeroth Survivors (Sync)* on your desktop.
 5. On every other PC: put `AzerothSync.exe` into the game folder there, choose
    the same sync folder, click **Desktop shortcut**, then play. The first time
@@ -80,8 +80,11 @@ Everything you change in the window is saved for this PC only.
 | Play | Download (asks only on a real conflict), start the game, upload after closing |
 | Download | You want the cloud state: one confirmation, then everything that differs is replaced |
 | Upload | You want your local state in the cloud: one confirmation, then everything that differs is replaced |
-| Status | Shows per area whether it is in sync, or which side is newer |
-| Desktop shortcut | Creates a shortcut that runs `AzerothSync.exe --play` |
+| Check status | Shows per area whether it is in sync, or which side is newer |
+| Desktop shortcut (Paths) | Creates a shortcut that runs `AzerothSync.exe --play` |
+
+The **Log** view shows the full technical log of the session. The look is
+described in [docs/DESIGN.md](docs/DESIGN.md).
 
 ## How it decides
 
