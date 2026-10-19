@@ -1,5 +1,36 @@
 # Changelog
 
+## 1.3.0
+
+Safety release, based on an external code review.
+
+* Downloads only take a cloud state that matches the last upload. The
+  manifest now records a fingerprint per area; a cloud copy that is still
+  syncing or incomplete is left alone ("try again in a moment"). The
+  Download button can still take it on purpose, after one confirmation.
+* Copies go to a staging folder, are verified and only then swapped in. If
+  anything fails, the old folder stays complete. An interrupted swap is
+  repaired on the next start.
+* Before uploading, the cloud is checked again; if another PC uploaded in the
+  meantime, nothing is overwritten.
+* Overlapping folders, drive roots, general Windows folders and linked
+  folders (junctions, symbolic links) are refused before anything changes.
+* Settings are locked while a sync runs, every run works on its own copy.
+* Play keeps the window open and says so if the progress was not uploaded
+  completely.
+* Only one AzerothSync runs at a time; the game is checked again right before
+  files are replaced.
+* Backups get unique names (milliseconds and PC name) and are written
+  completely before old ones are removed.
+* Fingerprints no longer depend on the Windows language. Existing sync memory
+  is converted automatically, without false conflicts.
+* Status only reads, it no longer creates or converts anything.
+* Sync memory and settings are written safely; an unreadable sync memory is
+  reported and kept. Local log file `%LOCALAPPDATA%\AzerothSync\log.txt`.
+* Enter in dialogs always means the safe choice (No or Cancel).
+* Sizes below 1 MB are shown in KB.
+* Engine tests in `tests/`.
+
 ## 1.2.0
 
 * Progress bar with files and MB for checking, downloading and uploading.

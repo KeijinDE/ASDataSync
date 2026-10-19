@@ -1,6 +1,7 @@
 // AzerothSync core: syncs save game, addons and addon settings of Azeroth Survivors through a cloud folder.
 // No merging: per area one complete state wins, the overwritten one is backed up first.
-// Hash, state.json and cloud layout are compatible with the older AzerothSync.ps1.
+// Safety rules: paths are validated, the cloud state must match the last upload's manifest,
+// copies go to a staging folder, are verified and only then swapped in.
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -8,6 +9,7 @@ using System.Globalization;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
@@ -108,8 +110,14 @@ namespace AzerothSync
         public void Save()
         {
             Directory.CreateDirectory(StateDir);
-            File.WriteAllLines(Path.Combine(StateDir, "settings.ini"), new[] {
-                "GamePath=" + GamePath, "CloudDir=" + CloudDir, "SaveDir=" + SaveDir, "ConfigDir=" + ConfigDir });
+            Engine.WriteAtomic(Path.Combine(StateDir, "settings.ini"), string.Join("\r\n", new[] {
+                "GamePath=" + GamePath, "CloudDir=" + CloudDir, "SaveDir=" + SaveDir, "ConfigDir=" + ConfigDir }) + "\r\n");
+        }
+
+        // Every run works on its own copy, so changes in the window cannot affect a running sync
+        public Settings Clone()
+        {
+            return (Settings)MemberwiseClone();
         }
     }
 
@@ -135,7 +143,7 @@ namespace AzerothSync
         public override int Read(byte[] buffer, int offset, int count)
         {
             int n = inner.Read(buffer, offset, count);
-            if (n > 0) onRead(n);
+            if (n > 0 && onRead != null) onRead(n);
             return n;
         }
         public override bool CanRead { get { return true; } }
@@ -150,10 +158,49 @@ namespace AzerothSync
         protected override void Dispose(bool disposing) { if (disposing) inner.Dispose(); base.Dispose(disposing); }
     }
 
+    // Junctions and symbolic links are refused; cloud placeholders (OneDrive and others) are fine
+    static class Links
+    {
+        const uint TagMountPoint = 0xA0000003, TagSymlink = 0xA000000C;
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        struct FindData
+        {
+            public uint Attributes;
+            public System.Runtime.InteropServices.ComTypes.FILETIME Created, Accessed, Written;
+            public uint SizeHigh, SizeLow, Reserved0, Reserved1;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] public string Name;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 14)] public string AltName;
+        }
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        static extern IntPtr FindFirstFileW(string name, out FindData data);
+
+        [DllImport("kernel32.dll")]
+        static extern bool FindClose(IntPtr handle);
+
+        public static bool IsLink(string path)
+        {
+            try
+            {
+                if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) == 0) return false;
+            }
+            catch { return false; }
+            FindData d;
+            IntPtr h = FindFirstFileW(path.TrimEnd('\\'), out d);
+            if (h == new IntPtr(-1)) return false;
+            FindClose(h);
+            return d.Reserved0 == TagMountPoint || d.Reserved0 == TagSymlink;
+        }
+    }
+
     public class Engine
     {
         const int KeepLocalBackups = 20, KeepCloudBackups = 10;
         const string None = "NONE", Empty = "EMPTY";
+        const string StageSuffix = ".azsync-new", OldSuffix = ".azsync-old";
+        // Hashes in state.json carry this prefix; values without it are the old culture dependent format
+        const string HashPrefix = "2:";
 
         public Settings S;
         public List<SyncSet> Sets;
@@ -163,6 +210,8 @@ namespace AzerothSync
         public Func<string, bool> Confirm = delegate { return false; };
         // Progress text and percent; percent -1 hides the progress display
         public Action<string, int> Progress = delegate { };
+        // Called right before an area is written (used by the tests to simulate changes in between)
+        public Action<SyncSet> BeforeApply = delegate { };
 
         string pLabel;
         long pDone, pTotal;
@@ -179,10 +228,81 @@ namespace AzerothSync
             S = s;
             Sets = new List<SyncSet> {
                 new SyncSet { Name = "save", Label = "Save game", Dir = s.SaveDir, Exclude = new[] { "language.txt" } },
-                new SyncSet { Name = "addons", Label = "AddOns", Dir = Path.Combine(s.ConfigDir, "AddOns"), Exclude = new string[0], Optional = true },
-                new SyncSet { Name = "saved", Label = "Addon settings", Dir = Path.Combine(s.ConfigDir, "saved"), Exclude = new string[0], Optional = true },
+                new SyncSet { Name = "addons", Label = "AddOns", Dir = Path.Combine(s.ConfigDir ?? "", "AddOns"), Exclude = new string[0], Optional = true },
+                new SyncSet { Name = "saved", Label = "Addon settings", Dir = Path.Combine(s.ConfigDir ?? "", "saved"), Exclude = new string[0], Optional = true },
             };
             foreach (var set in Sets) set.Cloud = Path.Combine(CloudData, set.Name);
+        }
+
+        // ---------- Path validation ----------
+
+        static string Canon(string p)
+        {
+            return Path.GetFullPath(p).TrimEnd('\\');
+        }
+
+        static bool Inside(string a, string b)
+        {
+            return a.Equals(b, StringComparison.OrdinalIgnoreCase) || a.StartsWith(b + "\\", StringComparison.OrdinalIgnoreCase);
+        }
+
+        static bool Overlap(string a, string b) { return Inside(a, b) || Inside(b, a); }
+
+        static string[] BroadFolders()
+        {
+            var list = new List<string>();
+            foreach (var f in new[] {
+                Environment.SpecialFolder.UserProfile, Environment.SpecialFolder.Desktop, Environment.SpecialFolder.DesktopDirectory,
+                Environment.SpecialFolder.MyDocuments, Environment.SpecialFolder.ApplicationData, Environment.SpecialFolder.LocalApplicationData,
+                Environment.SpecialFolder.Windows, Environment.SpecialFolder.ProgramFiles, Environment.SpecialFolder.ProgramFilesX86,
+                Environment.SpecialFolder.CommonApplicationData })
+            {
+                string p = Environment.GetFolderPath(f);
+                if (!string.IsNullOrEmpty(p)) list.Add(Canon(p));
+            }
+            return list.ToArray();
+        }
+
+        // Throws before anything is touched if the folders could destroy each other or unrelated data
+        public void Validate()
+        {
+            if (string.IsNullOrWhiteSpace(S.CloudDir))
+                throw new Exception("No sync folder set. Choose a folder in Google Drive, OneDrive, Dropbox or similar above.");
+            if (string.IsNullOrWhiteSpace(S.SaveDir)) throw new Exception("No save game folder set.");
+            if (string.IsNullOrWhiteSpace(S.ConfigDir)) throw new Exception("No game config folder set.");
+            string cloud, state;
+            var local = new List<KeyValuePair<string, string>>();
+            try
+            {
+                cloud = Canon(S.CloudDir);
+                state = Canon(S.StateDir);
+                foreach (var set in Sets) local.Add(new KeyValuePair<string, string>(set.Label, Canon(set.Dir)));
+            }
+            catch (Exception ex) { throw new Exception("A folder path is invalid: " + ex.Message); }
+
+            if (Path.GetPathRoot(cloud).TrimEnd('\\').Equals(cloud, StringComparison.OrdinalIgnoreCase))
+                throw new Exception("The sync folder must not be a drive root (" + cloud + "). Use a folder inside it.");
+            var broad = BroadFolders();
+            foreach (var l in local)
+            {
+                if (Path.GetPathRoot(l.Value).TrimEnd('\\').Equals(l.Value, StringComparison.OrdinalIgnoreCase))
+                    throw new Exception(l.Key + " folder must not be a drive root: " + l.Value);
+                if (broad.Any(b => b.Equals(l.Value, StringComparison.OrdinalIgnoreCase)))
+                    throw new Exception(l.Key + " folder is a general Windows folder, choose the game's own folder: " + l.Value);
+                if (Overlap(l.Value, cloud))
+                    throw new Exception(l.Key + " folder and sync folder overlap (" + l.Value + " / " + cloud + "). They must be separate.");
+                if (Overlap(l.Value, state))
+                    throw new Exception(l.Key + " folder overlaps the AzerothSync data folder " + state + ".");
+            }
+            for (int i = 0; i < local.Count; i++)
+                for (int j = i + 1; j < local.Count; j++)
+                    if (Overlap(local[i].Value, local[j].Value))
+                        throw new Exception(local[i].Key + " and " + local[j].Key + " folders overlap (" + local[i].Value + " / " + local[j].Value + ").");
+            if (Overlap(cloud, state))
+                throw new Exception("The sync folder overlaps the AzerothSync data folder " + state + ".");
+            foreach (var p in local.Select(l => l.Value).Concat(new[] { cloud }))
+                if (Directory.Exists(p) && Links.IsLink(p))
+                    throw new Exception("Linked folders (junction or symbolic link) are not supported: " + p);
         }
 
         // ---------- Files ----------
@@ -192,12 +312,50 @@ namespace AzerothSync
             var list = new List<FileEntry>();
             if (!Directory.Exists(dir)) return list;
             string root = Path.GetFullPath(dir).TrimEnd('\\');
-            foreach (string f in Directory.GetFiles(root, "*", SearchOption.AllDirectories))
+            Walk(root, root, exclude, list);
+            return list;
+        }
+
+        static void Walk(string root, string dir, string[] exclude, List<FileEntry> list)
+        {
+            foreach (string f in Directory.GetFiles(dir))
             {
                 string rel = f.Substring(root.Length + 1);
                 if (!exclude.Contains(rel, StringComparer.OrdinalIgnoreCase)) list.Add(new FileEntry { Rel = rel, Full = f, Length = new FileInfo(f).Length });
             }
-            return list;
+            foreach (string d in Directory.GetDirectories(dir))
+            {
+                if (Links.IsLink(d)) throw new Exception("Linked folders (junction or symbolic link) inside synced folders are not supported: " + d);
+                Walk(root, d, exclude, list);
+            }
+        }
+
+        static string Hex(byte[] b)
+        {
+            return BitConverter.ToString(b).Replace("-", "");
+        }
+
+        // Writes a text file through a temporary file, so a crash never leaves a half written file
+        public static void WriteAtomic(string path, string text)
+        {
+            string tmp = path + ".tmp";
+            File.WriteAllText(tmp, text, new UTF8Encoding(false));
+            if (!File.Exists(path)) { File.Move(tmp, path); return; }
+            try { File.Replace(tmp, path, null); }
+            catch (Exception)
+            {
+                // Some cloud drive file systems do not support ReplaceFile
+                if (!File.Exists(tmp)) throw;
+                File.Delete(path);
+                File.Move(tmp, path);
+            }
+        }
+
+        static void DeleteTree(string path)
+        {
+            if (!Directory.Exists(path)) return;
+            foreach (string f in Directory.GetFiles(path, "*", SearchOption.AllDirectories)) File.SetAttributes(f, FileAttributes.Normal);
+            Directory.Delete(path, true);
         }
 
         // ---------- Progress ----------
@@ -219,7 +377,11 @@ namespace AzerothSync
 
         void FileDone() { pFiles++; ReportProgress(false); }
 
-        static string Mb(long b) { return (b / 1048576.0).ToString("0.0", CultureInfo.InvariantCulture) + " MB"; }
+        static string Size(long b)
+        {
+            if (b < 1048576) return Math.Ceiling(b / 1024.0).ToString("0", CultureInfo.InvariantCulture) + " KB";
+            return (b / 1048576.0).ToString("0.0", CultureInfo.InvariantCulture) + " MB";
+        }
 
         void ReportProgress(bool force)
         {
@@ -229,12 +391,13 @@ namespace AzerothSync
             if (!force && !last && (pct == pLastPct || (DateTime.Now - pLastReport).TotalMilliseconds < 50)) return;
             pLastPct = pct;
             pLastReport = DateTime.Now;
-            Progress(pLabel + ": " + Math.Min(pFiles, pFilesTotal) + " of " + pFilesTotal + " files, " + Mb(Math.Min(pDone, pTotal)) + " of " + Mb(pTotal), pct);
+            Progress(pLabel + ": " + Math.Min(pFiles, pFilesTotal) + " of " + pFilesTotal + " files, " + Size(Math.Min(pDone, pTotal)) + " of " + Size(pTotal), pct);
         }
 
-        Stream OpenRead(string path)
+        Stream OpenRead(string path, bool report)
         {
-            return new ProgressStream(new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 16), AddBytes);
+            var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 16);
+            return new ProgressStream(fs, report ? (Action<long>)AddBytes : null);
         }
 
         // Files of all areas on both sides, for the checking step
@@ -243,61 +406,139 @@ namespace AzerothSync
             return sets.SelectMany(s => Files(s.Dir, s.Exclude).Concat(Files(s.Cloud, s.Exclude)));
         }
 
-        static string Hex(byte[] b)
-        {
-            return BitConverter.ToString(b).Replace("-", "");
-        }
+        // ---------- Fingerprints ----------
 
-        // Same as Get-TreeHash in the script: lines "path:HASH", sorted like Sort-Object (culture, case insensitive)
-        string TreeHash(string dir, string[] exclude)
+        // Format 2: lines "path:SHA256" with invariant lower case, sorted ordinal, joined with \n, UTF8.
+        // legacy returns format 1 (culture lower case and sort) to recognize old state.json values.
+        public string TreeHash(string dir, string[] exclude, out string legacy, bool report = true)
         {
+            legacy = None;
             if (!Directory.Exists(dir)) return None;
             var files = Files(dir, exclude);
+            legacy = Empty;
             if (files.Count == 0) return Empty;
-            var lines = new List<string>();
+            var hashes = new List<KeyValuePair<string, string>>();
             using (var sha = SHA256.Create())
             {
                 foreach (var f in files)
                 {
-                    using (var st = OpenRead(f.Full))
-                        lines.Add(f.Rel.ToLower() + ":" + Hex(sha.ComputeHash(st)));
-                    FileDone();
+                    using (var st = OpenRead(f.Full, report))
+                        hashes.Add(new KeyValuePair<string, string>(f.Rel, Hex(sha.ComputeHash(st))));
+                    if (report) FileDone();
                 }
-                lines.Sort(StringComparer.Create(CultureInfo.CurrentCulture, true));
-                return Hex(sha.ComputeHash(Encoding.UTF8.GetBytes(string.Join("\n", lines))));
+                var v2 = hashes.Select(h => h.Key.ToLowerInvariant() + ":" + h.Value).ToList();
+                v2.Sort(StringComparer.Ordinal);
+                var v1 = hashes.Select(h => h.Key.ToLower() + ":" + h.Value).ToList();
+                v1.Sort(StringComparer.Create(CultureInfo.CurrentCulture, true));
+                legacy = Hex(sha.ComputeHash(Encoding.UTF8.GetBytes(string.Join("\n", v1))));
+                return Hex(sha.ComputeHash(Encoding.UTF8.GetBytes(string.Join("\n", v2))));
             }
+        }
+
+        string TreeHash(string dir, string[] exclude)
+        {
+            string legacy;
+            return TreeHash(dir, exclude, out legacy, false);
         }
 
         static bool IsEmpty(string h) { return h == None || h == Empty; }
 
         public static string Newest(string dir, string[] exclude)
         {
-            var files = Files(dir, exclude);
-            if (files.Count == 0) return "-";
-            return files.Max(f => File.GetLastWriteTime(f.Full)).ToString("yyyy-MM-dd HH:mm");
+            try
+            {
+                var files = Files(dir, exclude);
+                if (files.Count == 0) return "-";
+                return files.Max(f => File.GetLastWriteTime(f.Full)).ToString("yyyy-MM-dd HH:mm");
+            }
+            catch { return "-"; }
         }
 
-        // Make the target an exact copy of the source (excluded files stay untouched)
-        void Mirror(string src, string dst, string[] exclude)
+        // ---------- Copy with staging ----------
+
+        // Restores or cleans up after an interrupted swap
+        void Recover(string dir)
         {
-            Directory.CreateDirectory(dst);
-            var srcFiles = Files(src, exclude);
-            var keep = new HashSet<string>(srcFiles.Select(f => f.Rel), StringComparer.OrdinalIgnoreCase);
-            foreach (var f in Files(dst, exclude))
-                if (!keep.Contains(f.Rel)) { File.SetAttributes(f.Full, FileAttributes.Normal); File.Delete(f.Full); }
-            foreach (string d in Directory.GetDirectories(dst, "*", SearchOption.AllDirectories).OrderByDescending(x => x.Length))
-                if (!Directory.EnumerateFileSystemEntries(d).Any()) Directory.Delete(d);
-            foreach (var f in srcFiles)
+            string stage = dir + StageSuffix, old = dir + OldSuffix;
+            if (Directory.Exists(old))
             {
-                string target = Path.Combine(dst, f.Rel);
-                Directory.CreateDirectory(Path.GetDirectoryName(target));
-                if (File.Exists(target)) File.SetAttributes(target, FileAttributes.Normal);
-                using (var input = OpenRead(f.Full))
-                using (var output = new FileStream(target, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 16))
-                    input.CopyTo(output, 1 << 16);
-                File.SetLastWriteTimeUtc(target, File.GetLastWriteTimeUtc(f.Full));
-                FileDone();
+                if (!Directory.Exists(dir))
+                {
+                    Directory.Move(old, dir);
+                    Log("  Restored " + dir + " after an interrupted sync.", Level.Warn);
+                }
+                else DeleteTree(old);
             }
+            if (Directory.Exists(stage)) DeleteTree(stage);
+        }
+
+        void RecoverAll()
+        {
+            foreach (var set in Sets)
+                foreach (var d in new[] { set.Dir, set.Cloud })
+                {
+                    string parent = Path.GetDirectoryName(Path.GetFullPath(d));
+                    if (parent != null && Directory.Exists(parent)) Recover(Path.GetFullPath(d));
+                }
+        }
+
+        // Makes dst an exact copy of src. Copies into a staging folder, verifies it against expectedHash
+        // and only then swaps it in. Excluded files of dst are kept. On any error dst stays unchanged.
+        void Mirror(string src, string dst, string[] exclude, string expectedHash)
+        {
+            dst = Path.GetFullPath(dst).TrimEnd('\\');
+            string stage = dst + StageSuffix, old = dst + OldSuffix;
+            Directory.CreateDirectory(Path.GetDirectoryName(dst));
+            DeleteTree(stage);
+            Directory.CreateDirectory(stage);
+            try
+            {
+                foreach (var f in Files(src, exclude))
+                {
+                    string target = Path.Combine(stage, f.Rel);
+                    Directory.CreateDirectory(Path.GetDirectoryName(target));
+                    using (var input = OpenRead(f.Full, true))
+                    using (var output = new FileStream(target, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1 << 16))
+                        input.CopyTo(output, 1 << 16);
+                    File.SetLastWriteTimeUtc(target, File.GetLastWriteTimeUtc(f.Full));
+                    FileDone();
+                }
+                if (TreeHash(stage, exclude) != expectedHash)
+                    throw new Exception("The source changed while copying (" + src + "). Nothing was replaced, please sync again.");
+                // Keep local only files such as language.txt
+                foreach (string ex in exclude)
+                {
+                    string keep = Path.Combine(dst, ex);
+                    if (File.Exists(keep)) File.Copy(keep, Path.Combine(stage, ex), true);
+                }
+            }
+            catch
+            {
+                DeleteTree(stage);
+                throw;
+            }
+            bool hadDst = Directory.Exists(dst);
+            try
+            {
+                if (hadDst) Directory.Move(dst, old);
+            }
+            catch (IOException ex)
+            {
+                DeleteTree(stage);
+                throw new Exception("The folder is in use and was not replaced: " + dst + " (" + ex.Message + "). Close programs or Explorer windows that use it and try again.");
+            }
+            try
+            {
+                Directory.Move(stage, dst);
+            }
+            catch
+            {
+                if (hadDst && !Directory.Exists(dst)) Directory.Move(old, dst);
+                DeleteTree(stage);
+                throw;
+            }
+            try { DeleteTree(old); }
+            catch (Exception ex) { Log("    Could not remove the old copy " + old + " (" + ex.Message + "), it is cleaned up next time.", Level.Dim); }
         }
 
         void Backup(string src, string[] exclude, string backupDir, string prefix, int keep)
@@ -305,19 +546,24 @@ namespace AzerothSync
             var files = Files(src, exclude);
             if (files.Count == 0) return;
             Directory.CreateDirectory(backupDir);
-            string zip = Path.Combine(backupDir, prefix + "_" + DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss") + ".zip");
-            if (File.Exists(zip)) File.Delete(zip);
-            using (var a = ZipFile.Open(zip, ZipArchiveMode.Create))
+            string zip = Path.Combine(backupDir, prefix + "_" + DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss-fff") + "_" + Environment.MachineName + ".zip");
+            for (int n = 2; File.Exists(zip); n++)
+                zip = Path.Combine(backupDir, prefix + "_" + DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss-fff") + "_" + Environment.MachineName + "_" + n + ".zip");
+            string tmp = zip + ".tmp";
+            using (var fs = new FileStream(tmp, FileMode.CreateNew, FileAccess.Write))
+            using (var a = new ZipArchive(fs, ZipArchiveMode.Create))
                 foreach (var f in files)
                 {
                     var entry = a.CreateEntry(f.Rel.Replace('\\', '/'));
                     entry.LastWriteTime = File.GetLastWriteTime(f.Full);
-                    using (var input = OpenRead(f.Full))
+                    using (var input = OpenRead(f.Full, true))
                     using (var output = entry.Open())
                         input.CopyTo(output, 1 << 16);
                     FileDone();
                 }
-            foreach (string old in Directory.GetFiles(backupDir, prefix + "_*.zip").OrderByDescending(x => x).Skip(keep))
+            File.Move(tmp, zip);
+            // Only complete archives count; the newest ones stay
+            foreach (string old in Directory.GetFiles(backupDir, prefix + "_*.zip").OrderByDescending(x => Path.GetFileName(x), StringComparer.Ordinal).Skip(keep))
                 File.Delete(old);
             Log("    Backup: " + zip, Level.Dim);
         }
@@ -336,27 +582,87 @@ namespace AzerothSync
                     foreach (var kv in (Dictionary<string, object>)v) h[kv.Key] = kv.Value == null ? null : kv.Value.ToString();
                 else if (j.TryGetValue("LastHash", out v) && v != null) h["save"] = v.ToString();
             }
-            catch { }
+            catch (Exception ex)
+            {
+                string copy = StateFile + ".broken-" + DateTime.Now.ToString("yyyyMMdd-HHmmss");
+                try { File.Copy(StateFile, copy, true); } catch { }
+                Log("  The sync memory could not be read (" + ex.Message + "). A copy was kept as " + copy + ". Every area is treated as never synced.", Level.Warn);
+            }
             return h;
+        }
+
+        // Last known fingerprint in format 2. Old values are mapped through the format 1 fingerprints of both sides.
+        static string LastHash(Dictionary<string, string> state, string name, string local, string localV1, string cloud, string cloudV1)
+        {
+            string v;
+            if (!state.TryGetValue(name, out v) || v == null) return null;
+            if (v.StartsWith(HashPrefix)) return v.Substring(HashPrefix.Length);
+            if (v == localV1) return local;
+            if (v == cloudV1) return cloud;
+            return v;
         }
 
         void SetLastHash(string name, string hash)
         {
             var h = LoadState();
-            h[name] = hash;
+            h[name] = HashPrefix + hash;
             Directory.CreateDirectory(S.StateDir);
             var o = new Dictionary<string, object> {
                 { "Hashes", h }, { "LastSync", DateTime.Now.ToString("o") }, { "Device", Environment.MachineName } };
-            File.WriteAllText(StateFile, new JavaScriptSerializer().Serialize(o), new UTF8Encoding(false));
+            WriteAtomic(StateFile, new JavaScriptSerializer().Serialize(o));
+        }
+
+        // ---------- Manifest ----------
+
+        Dictionary<string, object> LoadManifest()
+        {
+            try
+            {
+                if (File.Exists(Manifest))
+                    return (Dictionary<string, object>)new JavaScriptSerializer().DeserializeObject(File.ReadAllText(Manifest));
+            }
+            catch { }
+            return new Dictionary<string, object>();
+        }
+
+        // Fingerprint the last upload published for an area, or null for old manifests without it
+        static string ExpectedHash(Dictionary<string, object> manifest, string name)
+        {
+            object areas, area, hash;
+            if (manifest.TryGetValue("Areas", out areas) && areas is Dictionary<string, object>
+                && ((Dictionary<string, object>)areas).TryGetValue(name, out area) && area is Dictionary<string, object>
+                && ((Dictionary<string, object>)area).TryGetValue("Hash", out hash) && hash != null)
+                return hash.ToString();
+            return null;
+        }
+
+        // uploaded = false only records fingerprints of areas already in sync and keeps device and time
+        void WriteManifest(Dictionary<string, string> published, bool uploaded)
+        {
+            var old = LoadManifest();
+            var areas = new Dictionary<string, object>();
+            object a;
+            if (old.TryGetValue("Areas", out a) && a is Dictionary<string, object>)
+                foreach (var kv in (Dictionary<string, object>)a) areas[kv.Key] = kv.Value;
+            foreach (var kv in published)
+            {
+                var files = Files(Path.Combine(CloudData, kv.Key), Sets.First(s => s.Name == kv.Key).Exclude);
+                areas[kv.Key] = new Dictionary<string, object> { { "Hash", kv.Value }, { "Files", files.Count }, { "Bytes", files.Sum(f => f.Length) } };
+            }
+            object device = Environment.MachineName, time = DateTime.Now.ToString("o");
+            if (!uploaded && old.ContainsKey("Device") && old.ContainsKey("Time")) { device = old["Device"]; time = old["Time"]; }
+            var m = new Dictionary<string, object> {
+                { "Format", 2 }, { "Device", device }, { "Time", time }, { "Areas", areas } };
+            WriteAtomic(Manifest, new JavaScriptSerializer().Serialize(m));
         }
 
         public string CloudInfo()
         {
             try
             {
-                if (File.Exists(Manifest))
+                var m = LoadManifest();
+                if (m.ContainsKey("Time") && m.ContainsKey("Device"))
                 {
-                    var m = (Dictionary<string, object>)new JavaScriptSerializer().DeserializeObject(File.ReadAllText(Manifest));
                     DateTime t = DateTime.Parse(m["Time"].ToString(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind).ToLocalTime();
                     return "last uploaded by " + m["Device"] + " on " + t.ToString("yyyy-MM-dd HH:mm");
                 }
@@ -373,24 +679,33 @@ namespace AzerothSync
             return Process.GetProcessesByName(name).Length > 0;
         }
 
-        void PrepareCloud()
+        void AssertNotRunning(string what)
         {
-            if (string.IsNullOrEmpty(S.CloudDir))
-                throw new Exception("No sync folder set. Choose a folder in Google Drive, OneDrive, Dropbox or similar above.");
-            string parent = Path.GetDirectoryName(S.CloudDir.TrimEnd('\\'));
+            if (GameRunning()) throw new Exception("The game is running. Close it before you " + what + ".");
+        }
+
+        bool OldLayout()
+        {
+            bool oldSave = Directory.Exists(Path.Combine(CloudData, "Saves")) || File.Exists(Path.Combine(CloudData, "characters.txt"));
+            return oldSave && !Directory.Exists(Path.Combine(CloudData, "save"));
+        }
+
+        // Very old layout: the save game was directly in data\, now it is data\save\
+        void Migrate()
+        {
+            if (!OldLayout()) return;
+            string tmp = Path.Combine(S.CloudDir, "data_old");
+            Directory.Move(CloudData, tmp);
+            Directory.CreateDirectory(CloudData);
+            Directory.Move(tmp, Path.Combine(CloudData, "save"));
+            Log("Moved old cloud layout to data\\save.", Level.Dim);
+        }
+
+        void AssertCloudParent()
+        {
+            string parent = Path.GetDirectoryName(Path.GetFullPath(S.CloudDir).TrimEnd('\\'));
             if (parent == null || !Directory.Exists(parent))
                 throw new Exception("Sync folder not reachable: " + S.CloudDir + " (is your cloud drive running?)");
-            Directory.CreateDirectory(S.CloudDir);
-            // Very old layout: the save game was directly in data\, now it is data\save\
-            bool oldSave = Directory.Exists(Path.Combine(CloudData, "Saves")) || File.Exists(Path.Combine(CloudData, "characters.txt"));
-            if (oldSave && !Directory.Exists(Path.Combine(CloudData, "save")))
-            {
-                string tmp = Path.Combine(S.CloudDir, "data_old");
-                Directory.Move(CloudData, tmp);
-                Directory.CreateDirectory(CloudData);
-                Directory.Move(tmp, Path.Combine(CloudData, "save"));
-                Log("Moved old cloud layout to data\\save.", Level.Dim);
-            }
         }
 
         bool Available(SyncSet set, bool say)
@@ -403,64 +718,99 @@ namespace AzerothSync
             return true;
         }
 
-        void AssertNotRunning(string what)
+        class Eval
         {
-            if (GameRunning()) throw new Exception("The game is running. Close it before you " + what + ".");
+            public SyncSet Set;
+            public string Local, Cloud, Last, Expected;
         }
 
-        // ---------- Status ----------
-
-        public void Status()
+        Eval Evaluate(SyncSet set, Dictionary<string, string> state, Dictionary<string, object> manifest)
         {
-            PrepareCloud();
+            string l1, c1;
+            var e = new Eval { Set = set };
+            e.Local = TreeHash(set.Dir, set.Exclude, out l1);
+            e.Cloud = TreeHash(set.Cloud, set.Exclude, out c1);
+            e.Last = LastHash(state, set.Name, e.Local, l1, e.Cloud, c1);
+            e.Expected = ExpectedHash(manifest, set.Name);
+            return e;
+        }
+
+        // ---------- Status (read only) ----------
+
+        public bool Status()
+        {
+            Validate();
             Log("Sync folder: " + S.CloudDir, Level.Info);
-            Log("  " + CloudInfo(), Level.Dim);
-            var state = LoadState();
-            BeginProgress("Checking files", AllFiles(Sets.Where(s => Available(s, false))));
-            foreach (var set in Sets)
+            if (!Directory.Exists(S.CloudDir))
             {
-                if (!Available(set, true)) continue;
-                string local = TreeHash(set.Dir, set.Exclude), cloud = TreeHash(set.Cloud, set.Exclude), last;
-                state.TryGetValue(set.Name, out last);
+                Log("  The sync folder does not exist yet. It is created on the first upload.", Level.Warn);
+                return true;
+            }
+            Log("  " + CloudInfo(), Level.Dim);
+            if (OldLayout()) Log("  Old cloud layout found, it is converted on the next download or upload.", Level.Warn);
+            var state = LoadState();
+            var manifest = LoadManifest();
+            var sets = Sets.Where(s => Available(s, true)).ToList();
+            BeginProgress("Checking files", AllFiles(sets));
+            foreach (var set in sets)
+            {
+                var e = Evaluate(set, state, manifest);
                 string text; Level lv = Level.Warn;
-                if (local == cloud) { text = "in sync"; lv = Level.Good; }
-                else if (IsEmpty(cloud)) text = "cloud empty, upload";
-                else if (cloud == last) text = "local is newer, upload";
-                else if (local == last || IsEmpty(local)) text = "cloud is newer, download";
+                if (e.Local == e.Cloud) { text = "in sync"; lv = Level.Good; }
+                else if (IsEmpty(e.Cloud)) text = "cloud empty, upload";
+                else if (e.Expected != null && e.Cloud != e.Expected) text = "cloud copy incomplete or still syncing, wait";
+                else if (e.Cloud == e.Last) text = "local is newer, upload";
+                else if (e.Local == e.Last || IsEmpty(e.Local)) text = "cloud is newer, download";
                 else text = "both changed or never synced";
                 Log("  " + set.Label + ": " + text + " (local " + Newest(set.Dir, set.Exclude) + ", cloud " + Newest(set.Cloud, set.Exclude) + ")", lv);
             }
             EndProgress();
+            return true;
         }
 
         // ---------- Download ----------
 
-        // force = the user explicitly wants the cloud state: one confirmation for everything, no conflict questions
+        // force = the user explicitly wants the cloud state: one confirmation for everything, no conflict questions.
+        // Returns false if anything was cancelled or could not be downloaded.
         public bool Pull(bool force)
         {
             Log("Downloading from the cloud ...", Level.Info);
-            PrepareCloud();
+            Validate();
             AssertNotRunning("download");
-            var state = LoadState();
-            var take = new List<SyncSet>();
-            var conflicts = new List<SyncSet>();
-            var cloudHash = new Dictionary<string, string>();
-            BeginProgress("Checking files", AllFiles(Sets.Where(s => Available(s, false))));
-            foreach (var set in Sets)
+            AssertCloudParent();
+            if (!Directory.Exists(S.CloudDir))
             {
-                if (!Available(set, true)) continue;
-                string local = TreeHash(set.Dir, set.Exclude), cloud = TreeHash(set.Cloud, set.Exclude), last;
-                state.TryGetValue(set.Name, out last);
-                cloudHash[set.Name] = cloud;
-                if (IsEmpty(cloud)) Log("  " + set.Label + ": cloud is empty, nothing to download.", Level.Warn);
-                else if (local == cloud) { SetLastHash(set.Name, local); Log("  " + set.Label + ": up to date.", Level.Good); }
-                else if (force || IsEmpty(local) || local == last) take.Add(set);
-                else if (cloud == last) Log("  " + set.Label + ": local is newer, kept.", Level.Good);
-                else conflicts.Add(set);
+                Log("  The sync folder does not exist yet, nothing to download.", Level.Warn);
+                return true;
             }
+            Migrate();
+            RecoverAll();
+            var state = LoadState();
+            var manifest = LoadManifest();
+            var take = new List<Eval>();
+            var conflicts = new List<Eval>();
+            bool complete = true;
+            var sets = Sets.Where(s => Available(s, true)).ToList();
+            BeginProgress("Checking files", AllFiles(sets));
+            foreach (var set in sets)
+            {
+                var e = Evaluate(set, state, manifest);
+                if (IsEmpty(e.Cloud)) Log("  " + set.Label + ": cloud is empty, nothing to download.", Level.Warn);
+                else if (e.Local == e.Cloud) { SetLastHash(set.Name, e.Local); Log("  " + set.Label + ": up to date.", Level.Good); }
+                else if (e.Expected != null && e.Cloud != e.Expected && !force)
+                {
+                    Log("  " + set.Label + ": the cloud copy does not match the last upload yet (incomplete or still syncing). Nothing replaced, try again in a moment.", Level.Warn);
+                    complete = false;
+                }
+                else if (force || IsEmpty(e.Local) || e.Local == e.Last) take.Add(e);
+                else if (e.Cloud == e.Last) Log("  " + set.Label + ": local is newer, kept.", Level.Good);
+                else conflicts.Add(e);
+            }
+            EndProgress();
             if (force && take.Count > 0)
             {
-                string names = string.Join(", ", take.Select(t => t.Label));
+                // A forced download may also take a cloud state that was changed by hand (for example a restored backup)
+                string names = string.Join(", ", take.Select(t => t.Set.Label + (t.Expected != null && t.Cloud != t.Expected ? " (does not match the last upload, maybe still syncing)" : "")));
                 if (!Confirm("Replace your local data with the cloud state?\n\n" + names + "\n\nA backup is made first."))
                 {
                     Log("  Cancelled, nothing changed.", Level.Warn);
@@ -469,14 +819,14 @@ namespace AzerothSync
             }
             if (conflicts.Count > 0)
             {
-                switch (AskConflict(conflicts, true))
+                switch (AskConflict(conflicts.Select(c => c.Set).ToList(), true))
                 {
                     case Choice.Cloud: take.AddRange(conflicts); break;
                     case Choice.Local:
                         foreach (var c in conflicts)
                         {
-                            SetLastHash(c.Name, cloudHash[c.Name]);
-                            Log("  " + c.Label + ": local state kept, it will replace the cloud on the next upload.", Level.Good);
+                            SetLastHash(c.Set.Name, c.Cloud);
+                            Log("  " + c.Set.Label + ": local state kept, it will replace the cloud on the next upload.", Level.Good);
                         }
                         break;
                     default:
@@ -484,46 +834,60 @@ namespace AzerothSync
                         return false;
                 }
             }
+            if (take.Count == 0) return complete;
+            AssertNotRunning("download");
             // Backup of the local side plus copy of the cloud side
-            BeginProgress("Downloading", AllFiles(take));
-            foreach (var set in take)
+            BeginProgress("Downloading", AllFiles(take.Select(t => t.Set)));
+            foreach (var e in take)
             {
-                Backup(set.Dir, set.Exclude, Path.Combine(S.StateDir, "backups"), set.Name, KeepLocalBackups);
-                Mirror(set.Cloud, set.Dir, set.Exclude);
-                SetLastHash(set.Name, cloudHash[set.Name]);
-                Log("  " + set.Label + ": downloaded from the cloud.", Level.Good);
+                BeforeApply(e.Set);
+                Backup(e.Set.Dir, e.Set.Exclude, Path.Combine(S.StateDir, "backups"), e.Set.Name, KeepLocalBackups);
+                Mirror(e.Set.Cloud, e.Set.Dir, e.Set.Exclude, e.Cloud);
+                SetLastHash(e.Set.Name, e.Cloud);
+                Log("  " + e.Set.Label + ": downloaded from the cloud.", Level.Good);
             }
             EndProgress();
-            if (take.Count > 0) Log("  Cloud state: " + CloudInfo(), Level.Dim);
-            return true;
+            Log("  Cloud state: " + CloudInfo(), Level.Dim);
+            return complete;
         }
 
         // ---------- Upload ----------
 
+        // Returns false if anything was cancelled or local changes were not uploaded.
         public bool Push(bool force)
         {
             Log("Uploading to the cloud ...", Level.Info);
-            PrepareCloud();
+            Validate();
             AssertNotRunning("upload");
+            AssertCloudParent();
+            Directory.CreateDirectory(S.CloudDir);
+            Migrate();
+            RecoverAll();
             var state = LoadState();
-            var upload = new List<SyncSet>();
-            var conflicts = new List<SyncSet>();
-            var localHash = new Dictionary<string, string>();
-            BeginProgress("Checking files", AllFiles(Sets.Where(s => Available(s, false))));
-            foreach (var set in Sets)
+            var manifest = LoadManifest();
+            var upload = new List<Eval>();
+            var conflicts = new List<Eval>();
+            var published = new Dictionary<string, string>();
+            bool complete = true;
+            var sets = Sets.Where(s => Available(s, true)).ToList();
+            BeginProgress("Checking files", AllFiles(sets));
+            foreach (var set in sets)
             {
-                if (!Available(set, true)) continue;
-                string local = TreeHash(set.Dir, set.Exclude), cloud = TreeHash(set.Cloud, set.Exclude), last;
-                state.TryGetValue(set.Name, out last);
-                localHash[set.Name] = local;
-                if (IsEmpty(local)) Log("  " + set.Label + ": nothing local, nothing uploaded.", Level.Warn);
-                else if (local == cloud) { SetLastHash(set.Name, local); Log("  " + set.Label + ": cloud is up to date.", Level.Good); }
-                else if (force || IsEmpty(cloud) || cloud == last) upload.Add(set);
-                else conflicts.Add(set);
+                var e = Evaluate(set, state, manifest);
+                if (IsEmpty(e.Local)) Log("  " + set.Label + ": nothing local, nothing uploaded.", Level.Warn);
+                else if (e.Local == e.Cloud)
+                {
+                    SetLastHash(set.Name, e.Local);
+                    if (e.Expected != e.Cloud) published[set.Name] = e.Cloud;
+                    Log("  " + set.Label + ": cloud is up to date.", Level.Good);
+                }
+                else if (force || IsEmpty(e.Cloud) || e.Cloud == e.Last) upload.Add(e);
+                else conflicts.Add(e);
             }
+            EndProgress();
             if (force && upload.Count > 0)
             {
-                string names = string.Join(", ", upload.Select(t => t.Label));
+                string names = string.Join(", ", upload.Select(t => t.Set.Label));
                 if (!Confirm("Replace the cloud state with your local data?\n\n" + names + "\n\nA backup is made first."))
                 {
                     Log("  Cancelled, nothing changed.", Level.Warn);
@@ -532,42 +896,58 @@ namespace AzerothSync
             }
             if (conflicts.Count > 0)
             {
-                switch (AskConflict(conflicts, false))
+                switch (AskConflict(conflicts.Select(c => c.Set).ToList(), false))
                 {
                     case Choice.Local: upload.AddRange(conflicts); break;
                     case Choice.Cloud:
-                        foreach (var c in conflicts) Log("  " + c.Label + ": cloud kept, use \"Download\" to get it.", Level.Warn);
+                        foreach (var c in conflicts) Log("  " + c.Set.Label + ": cloud kept, your local changes were NOT uploaded. Use \"Download\" to get the cloud state.", Level.Warn);
+                        complete = false;
                         break;
                     default:
-                        Log("  Cancelled, nothing changed.", Level.Warn);
+                        Log("  Cancelled, your local changes were NOT uploaded.", Level.Warn);
                         return false;
                 }
             }
-            // Backup of the cloud side plus copy of the local side
-            BeginProgress("Uploading", AllFiles(upload));
-            foreach (var set in upload)
-            {
-                Backup(set.Cloud, set.Exclude, CloudHistory, set.Name, KeepCloudBackups);
-                Mirror(set.Dir, set.Cloud, set.Exclude);
-                SetLastHash(set.Name, localHash[set.Name]);
-                Log("  " + set.Label + ": uploaded.", Level.Good);
-            }
-            EndProgress();
             if (upload.Count > 0)
             {
-                var m = new Dictionary<string, object> { { "Device", Environment.MachineName }, { "Time", DateTime.Now.ToString("o") } };
-                File.WriteAllText(Manifest, new JavaScriptSerializer().Serialize(m), new UTF8Encoding(false));
+                AssertNotRunning("upload");
+                // Backup of the cloud side plus copy of the local side
+                BeginProgress("Uploading", AllFiles(upload.Select(t => t.Set)));
+                foreach (var e in upload)
+                {
+                    BeforeApply(e.Set);
+                    // Another PC may have uploaded since the check: never overwrite that without asking
+                    if (TreeHash(e.Set.Cloud, e.Set.Exclude) != e.Cloud)
+                    {
+                        Log("  " + e.Set.Label + ": the cloud changed during this sync, NOT uploaded. Sync again to decide.", Level.Warn);
+                        complete = false;
+                        continue;
+                    }
+                    Backup(e.Set.Cloud, e.Set.Exclude, CloudHistory, e.Set.Name, KeepCloudBackups);
+                    Mirror(e.Set.Dir, e.Set.Cloud, e.Set.Exclude, e.Local);
+                    SetLastHash(e.Set.Name, e.Local);
+                    published[e.Set.Name] = e.Local;
+                    Log("  " + e.Set.Label + ": uploaded.", Level.Good);
+                }
+                EndProgress();
             }
-            return true;
+            if (published.Count > 0)
+            {
+                bool uploaded = upload.Any(u => published.ContainsKey(u.Set.Name));
+                WriteManifest(published, uploaded);
+                if (uploaded) Log("  Written to the sync folder. Your cloud app uploads it in the background, wait until it is done before you switch PCs.", Level.Dim);
+            }
+            return complete;
         }
 
         // ---------- Play ----------
 
-        public void Play()
+        // Returns true only if the progress after playing was uploaded completely
+        public bool Play()
         {
             if (!File.Exists(S.GamePath)) throw new Exception("Game not found: " + S.GamePath);
             if (GameRunning()) throw new Exception("The game is already running.");
-            if (!Pull(false) && !Confirm("The sync was cancelled.\nPlay with your local state anyway?")) return;
+            if (!Pull(false) && !Confirm("The download was not complete.\nPlay with your local state anyway?")) return false;
             EndProgress();
             Log("Starting Azeroth Survivors ...", Level.Info);
             var p = Process.Start(new ProcessStartInfo(S.GamePath) { WorkingDirectory = Path.GetDirectoryName(S.GamePath), UseShellExecute = false });
@@ -575,7 +955,7 @@ namespace AzerothSync
             while (GameRunning()) Thread.Sleep(2000);
             Log("Game closed.", Level.Info);
             Thread.Sleep(3000);
-            Push(false);
+            return Push(false);
         }
     }
 }

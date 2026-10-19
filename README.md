@@ -97,7 +97,15 @@ Backups:
 * Local backups before a download: `%LOCALAPPDATA%\AzerothSync\backups\` (last 20 per area)
 * Cloud backups before an upload: `<sync folder>\history\` (last 10 per area)
 
-To restore, unzip a backup into the matching folder.
+To restore, delete the content of the matching folder (keep `language.txt`
+in the save game folder) and unzip the backup into it, so no newer files
+stay behind. After restoring a cloud backup into `data\<area>`, click
+**Download** on each PC.
+
+Safety: AzerothSync only takes a cloud state that matches the last upload
+(a copy that is still syncing is left alone), copies into a temporary folder
+and swaps it in only after checking it, and refuses overlapping or linked
+folders. Details in [docs/HANDOVER.md](docs/HANDOVER.md).
 
 ## Antivirus and SmartScreen
 

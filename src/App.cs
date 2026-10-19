@@ -19,15 +19,26 @@ namespace AzerothSync
         {
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new MainForm(args.Any(a => a.Equals("--play", StringComparison.OrdinalIgnoreCase))));
+            // Only one AzerothSync per Windows user, two at once could work on the same folders
+            bool first;
+            using (var mutex = new Mutex(true, "Local\\AzerothSync-" + Environment.UserName, out first))
+            {
+                if (!first)
+                {
+                    MessageBox.Show("AzerothSync is already running.", "AzerothSync", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+                Application.Run(new MainForm(args.Any(a => a.Equals("--play", StringComparison.OrdinalIgnoreCase))));
+            }
         }
     }
 
     class MainForm : Form
     {
-        public const string Version = "1.2.0";
+        public const string Version = "1.3.0";
         readonly bool autoPlay;
         Settings settings;
+        GroupBox settingsGroup;
         TextBox tbGame, tbCloud, tbSave, tbConfig;
         Button btnPlay, btnPull, btnPush, btnStatus, btnShortcut;
         RichTextBox log;
@@ -68,6 +79,7 @@ namespace AzerothSync
                 "The benilla-config folder that contains AddOns and saved. Taken from next to the game if it exists there, otherwise " + Settings.FallbackConfigDir + ".");
             group.Controls.Add(grid);
             root.Controls.Add(group);
+            settingsGroup = group;
 
             var buttons = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, Padding = new Padding(0, 8, 0, 8) };
             btnPlay = MakeButton("Play", "Download, start the game, upload after it closes", delegate { Run(e => e.Play()); });
@@ -170,6 +182,25 @@ namespace AzerothSync
             log.SelectionColor = c;
             log.AppendText(text + "\n");
             log.ScrollToCaret();
+            if (text.Length > 0) FileLog(level.ToString().ToUpperInvariant() + " " + text.Trim());
+        }
+
+        // Local diagnosis log, about 1 MB, the previous one is kept as log.old.txt
+        void FileLog(string line)
+        {
+            try
+            {
+                string dir = settings.StateDir, file = Path.Combine(dir, "log.txt");
+                Directory.CreateDirectory(dir);
+                if (File.Exists(file) && new FileInfo(file).Length > 1048576)
+                {
+                    string old = Path.Combine(dir, "log.old.txt");
+                    if (File.Exists(old)) File.Delete(old);
+                    File.Move(file, old);
+                }
+                File.AppendAllText(file, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + " " + line + "\r\n");
+            }
+            catch { }
         }
 
         // percent -1: keep the space, but show an empty bar and no text
@@ -185,31 +216,39 @@ namespace AzerothSync
         {
             busy = on;
             foreach (var b in new[] { btnPlay, btnPull, btnPush, btnStatus, btnShortcut }) b.Enabled = !on;
-            foreach (var t in new[] { tbGame, tbCloud, tbSave, tbConfig }) t.ReadOnly = on;
+            settingsGroup.Enabled = !on;
             UseWaitCursor = on;
         }
 
-        void Run(Action<Engine> work)
+        // work returns true only if everything it should do was done
+        void Run(Func<Engine, bool> work)
         {
             if (busy) return;
             SaveSettings();
-            var engine = new Engine(settings);
+            // The running sync gets its own copy of the settings
+            var engine = new Engine(settings.Clone());
             engine.Log = Write;
             engine.Progress = ShowProgress;
             engine.Confirm = q => (bool)Invoke(new Func<bool>(() =>
-                MessageBox.Show(this, q, "AzerothSync", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes));
+                MessageBox.Show(this, q, "AzerothSync", MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) == DialogResult.Yes));
             engine.AskConflict = (sets, pulling) => (Choice)Invoke(new Func<Choice>(() => ConflictDialog.Ask(this, engine, sets, pulling)));
             SetBusy(true);
             Write("", Level.Info);
             var t = new Thread(() =>
             {
-                bool ok = true;
-                try { work(engine); }
-                catch (Exception ex) { ok = false; Write("ERROR: " + ex.Message, Level.Error); }
+                bool ok = false;
+                try { ok = work(engine); }
+                catch (Exception ex)
+                {
+                    Write("ERROR: " + ex.Message, Level.Error);
+                    FileLog("EXCEPTION " + ex);
+                }
                 BeginInvoke(new Action(() =>
                 {
                     SetBusy(false);
                     ShowProgress("", -1);
+                    if (autoPlay && !ok)
+                        Write("Not everything was synced, see above. The window stays open. Fix the cause, then use Upload or Download.", Level.Warn);
                     if (autoPlay && ok)
                     {
                         Write("Done, closing in a moment.", Level.Dim);
@@ -302,7 +341,8 @@ namespace AzerothSync
             var bCloud = mk("Use cloud", Choice.Cloud);
             var bLocal = mk("Keep local", Choice.Local);
             var bAbort = mk("Cancel", Choice.Abort);
-            f.AcceptButton = pulling ? bCloud : bLocal;
+            // Enter never overwrites anything
+            f.AcceptButton = bAbort;
             f.CancelButton = bAbort;
             var layout = new TableLayoutPanel { AutoSize = true, ColumnCount = 1, Dock = DockStyle.Fill };
             layout.Controls.Add(text);
