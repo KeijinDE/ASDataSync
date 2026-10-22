@@ -7,6 +7,87 @@ keeps in sync between your computers.
 
 > Unofficial fan tool. Not affiliated with the developers of Azeroth Survivors.
 
+## Quick start
+
+1. Install **Google Drive for desktop**, **OneDrive** or **Dropbox** on every
+   PC and sign in. Wait until its folder or drive appears in Windows Explorer.
+   For Google, use [Google Drive for desktop](https://www.google.com/drive/download/).
+2. Download `AzerothSync.exe` from the [releases](../../releases) and put it in
+   your game folder, next to `AzerothSurvivors.exe`.
+3. Start it on the PC with your latest progress. Follow the four setup steps:
+   **Game**, **Cloud**, **First sync**, **Done**. Choose a folder inside your cloud
+   drive, for example `G:\My Drive\AzerothSync`. A new folder is created on upload.
+4. On this first PC, choose **Upload this PC's progress**. Wait until your
+   cloud app has finished uploading.
+5. On every other PC, repeat setup with the **same cloud folder** and choose
+   **Download to this PC**. Setup compares save game, AddOns and addon settings and lists the differing
+   areas. If both sides hold different progress, it shows **Keep this PC's
+   progress (upload)** and **Use the cloud progress (download)** instead:
+   check the displayed times and pick one. One complete state wins, the other
+   is backed up. If everything already matches, just click **Next**.
+6. Create the desktop shortcut in the last step. From now on, always start
+   with **Azeroth Survivors (Sync)**. Close the game and let your cloud app
+   finish transferring before switching PCs.
+
+![Setup guide, step 2: choose your cloud folder](docs/design/wizard-cloud.png)
+
+![Setup guide, step 3: first sync](docs/design/wizard-first-sync.png)
+
+> **Steam Deck / Linux:** not supported yet. Google Drive for desktop does not
+> exist for Linux, and the game runs inside Proton there. Support is being
+> worked on.
+
+## Which folder is which
+
+| Folder | What it is for | Typical example |
+|---|---|---|
+| Game | The executable that starts the game, usually found automatically | `C:\Games\AzerothSurvivors\AzerothSurvivors.exe` |
+| Sync folder | The shared folder inside your cloud drive. Usually the only path you choose. Use the same folder on all PCs; drive letters can differ. | `G:\My Drive\AzerothSync` |
+| Save game folder | This PC's characters and progress, found automatically | `%APPDATA%\wenilla-rogue` |
+| Game config folder | This PC's AddOns and addon settings, found automatically | `C:\Git\wenilla\benilla-config` (the game installer's default) |
+
+**Paths** explains and checks each path. **Choose...** changes it; **Open**
+opens the folder in Explorer. A green check means the path looks right on this
+PC. It does not confirm that the cloud app has finished transferring.
+
+## FAQ
+
+**Does AzerothSync log into my Google account?**
+
+No. Your cloud app signs in and transfers files. AzerothSync only copies files
+into the local folder provided by that app. It never asks for your password.
+
+**Which PC do I set up first?**
+
+The PC with your latest progress. Upload there first. Then download on your
+other PCs. Setup checks all three areas, including AddOns and addon settings,
+and asks which state to keep when both sides differ. If everything already
+matches or there is nothing yet, continue with Next. After a successful sync,
+you can also continue; any remaining differences stay visible.
+
+**Setup says the game config folder is missing.**
+
+Choose **Choose game config folder** in First sync and select `benilla-config`.
+The guide lists areas not synced on this PC. If you intentionally only want
+save games, click **Continue without AddOns** before Next.
+
+**Setup says files are busy or keeps checking.**
+
+Large AddOns folders and streamed cloud files can take time to check. The window
+stays responsive. If files cannot be read, wait for the cloud app to finish,
+then click **Check again**. Sync and Next stay unavailable until the check succeeds.
+
+**Can I use the Google Drive website?**
+
+The website alone does not work. Install Google Drive for desktop and sign in
+so that your drive appears as a folder or drive letter in Windows Explorer.
+
+**Where is benilla-config?**
+
+`C:\Git\wenilla\benilla-config` is the game installer's default config
+location. It is not a developer-only path. Some installations put
+`benilla-config` next to the game instead. It contains `AddOns` and `saved`.
+
 ![AzerothSync window with sample data](docs/screenshot.png)
 
 ## What it does
@@ -36,31 +117,8 @@ state always wins. Do not play on two PCs at the same time.
 * Windows 10 or 11 (uses .NET Framework 4, which is part of Windows)
 * A cloud drive that shows up as a normal folder on every PC
 
-## Setup
-
-1. Download `AzerothSync.exe` from the [releases](../../releases) and put it
-   **into your game folder**, next to `AzerothSurvivors.exe`. It then finds
-   the game by itself.
-2. Start `AzerothSync.exe`, open **Paths** on the left and check the four
-   folders. Use `...` to change them:
-   * **Game**: found automatically when AzerothSync sits in the game folder
-   * **Sync folder**: choose a folder inside your cloud drive, for example
-     `Google Drive\AzerothSync`
-   * **Save game folder**: normally `%APPDATA%\wenilla-rogue`, filled in automatically
-   * **Game config folder**: the `benilla-config` folder with `AddOns` and
-     `saved`. Taken from the game folder if it is there, otherwise
-     `C:\Git\wenilla\benilla-config` is suggested. Check it once.
-3. Under **Play & Sync**, click **Upload** on the PC that has your current progress.
-4. Under **Paths**, click **Desktop shortcut**. From now on start the game with
-   *Azeroth Survivors (Sync)* on your desktop.
-5. On every other PC: put `AzerothSync.exe` into the game folder there, choose
-   the same sync folder, click **Desktop shortcut**, then play. The first time
-   it will ask about a conflict, choose **Use cloud**.
-
-Alternative: keep `AzerothSync.exe` inside the sync folder itself. Then the
-sync folder is found automatically and you choose the game once.
-
 Settings are stored per PC in `%LOCALAPPDATA%\AzerothSync\settings.ini`.
+You can reopen the four steps at any time with **Setup guide** in the sidebar.
 
 ## How paths are found
 

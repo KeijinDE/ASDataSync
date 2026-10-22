@@ -12,7 +12,7 @@ namespace AzerothSync
     {
         readonly bool designPreview;
         Panel overviewPage,pathsPage,logPage;
-        BronzeButton navOverview,navPaths,navLog;
+        BronzeButton navOverview,navPaths,navLog,navSetup;
         Label progressDetail;
         readonly ToolTip lookTips=new ToolTip { AutoPopDelay=18000,InitialDelay=350 };
         readonly Dictionary<string,AreaRow> areaRows=new Dictionary<string,AreaRow>();
@@ -45,10 +45,11 @@ namespace AzerothSync
             navOverview=Nav("Play & Sync",sidebar,39,delegate{SelectPage(overviewPage,navOverview);});
             navPaths=Nav("Paths",sidebar,89,delegate{SelectPage(pathsPage,navPaths);});
             navLog=Nav("Log",sidebar,139,delegate{SelectPage(logPage,navLog);});
+            navSetup=Nav("Setup guide",sidebar,189,delegate{OpenWizard();});
             var note=Theme.Label("One PC after\nthe other.\n\nYour cloud app\nhandles the transfer.",8.5f,Theme.Muted);note.SetBounds(10,280,146,120);sidebar.Controls.Add(note);
             var content=new Panel{Dock=DockStyle.Fill,Margin=Padding.Empty,BackColor=Theme.Background};body.Controls.Add(content,1,0);
-            overviewPage=BuildOverview();pathsPage=BuildPaths();logPage=BuildLog();
-            foreach(var page in new[]{overviewPage,pathsPage,logPage}){page.Dock=DockStyle.Fill;content.Controls.Add(page);}SelectPage(overviewPage,navOverview);
+            overviewPage=BuildOverview();pathsPage=BuildPaths();logPage=BuildLog();wizardPage=BuildWizard();
+            foreach(var page in new[]{overviewPage,pathsPage,logPage,wizardPage}){page.Dock=DockStyle.Fill;content.Controls.Add(page);}SelectPage(overviewPage,navOverview);
             var footer=new Panel{Dock=DockStyle.Fill,Margin=Padding.Empty,BackColor=Theme.Background};root.Controls.Add(footer,0,2);
             footer.Paint+=(s,e)=>{using(var p=new Pen(Theme.Border))e.Graphics.DrawLine(p,28,0,footer.Width-28,0);};
             var foot=Theme.Label(designPreview?"Preview · All actions use sample data only.":"Save game · AddOns · Addon settings",8,Theme.Muted);foot.SetBounds(29,10,760,20);footer.Controls.Add(foot);
@@ -70,9 +71,10 @@ namespace AzerothSync
         }
         void SelectPage(Panel page,BronzeButton selected)
         {
-            foreach(var p in new[]{overviewPage,pathsPage,logPage})if(p!=null)p.Visible=p==page;
+            if(page!=wizardPage && wizardActive){wizardActive=false;InvalidateWizardAdvice();}
+            foreach(var p in new[]{overviewPage,pathsPage,logPage,wizardPage})if(p!=null)p.Visible=p==page;
             if(page!=null)page.BringToFront();
-            foreach(var b in new[]{navOverview,navPaths,navLog})if(b!=null){b.Selected=b==selected;b.Invalidate();}
+            foreach(var b in new[]{navOverview,navPaths,navLog,navSetup})if(b!=null){b.Selected=b==selected;b.Invalidate();}
         }
         Panel PageHeading(string title,string subtitle)
         {
@@ -112,31 +114,20 @@ namespace AzerothSync
         }
         Panel BuildPaths()
         {
-            var page=new Panel{BackColor=Theme.Background};
-            var layout=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=4,Margin=Padding.Empty};layout.RowStyles.Add(new RowStyle(SizeType.Absolute,86));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,326));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,58));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));page.Controls.Add(layout);
-            layout.Controls.Add(PageHeading("Where everything lives.","These paths apply to this PC only."),0,0);
-            var group=new BronzePanel{Dock=DockStyle.Fill,Padding=new Padding(20,20,20,12),Margin=Padding.Empty};settingsGroup=group;
-            var grid=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=3,RowCount=0,Margin=Padding.Empty,BackColor=Theme.Surface};grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,130));grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,40));
-            tbGame=AddRow(grid,"Game",settings.GamePath,true,"AzerothSurvivors.exe, used to start the game. Found automatically when AzerothSync sits in the game folder.");
-            tbCloud=AddRow(grid,"Sync folder",settings.CloudDir,false,"A shared folder in Google Drive, OneDrive, Dropbox or similar.");
-            tbSave=AddRow(grid,"Save game folder",settings.SaveDir,false,"Usually %APPDATA%\\wenilla-rogue.");
-            tbConfig=AddRow(grid,"Game config folder",settings.ConfigDir,false,"benilla-config with the AddOns and saved folders. Next to the game, otherwise C:\\Git\\wenilla\\benilla-config.");
-            for(int i=0;i<4;i++)grid.RowStyles.Add(new RowStyle(SizeType.Absolute,70));
-            foreach(Control c in grid.Controls)
-            {
-                c.ForeColor=Theme.Text;c.BackColor=Theme.Surface;
-                var box=c as TextBox;if(box!=null){box.BorderStyle=BorderStyle.FixedSingle;box.Font=Theme.Body(9);box.Margin=new Padding(0,18,10,0);lookTips.SetToolTip(box,box.Text);}
-                if(c is Button)c.Margin=new Padding(0,15,0,0);
-            }
-            foreach(var box in grid.Controls.OfType<TextBox>().ToArray())
-            {
-                var cell=grid.GetPositionFromControl(box);box.AccessibleName=new[]{"Game", "Sync folder", "Save game folder", "Game config folder"}[cell.Row];grid.Controls.Remove(box);
-                var field=new BronzePanel{Dock=DockStyle.Top,Height=34,Padding=new Padding(9,7,9,4),Margin=new Padding(0,15,10,0)};
-                box.BorderStyle=BorderStyle.None;box.Dock=DockStyle.Fill;box.Margin=Padding.Empty;field.Controls.Add(box);grid.Controls.Add(field,cell.Column,cell.Row);
-            }
-            group.Controls.Add(grid);layout.Controls.Add(group,0,1);
-            var actions=new FlowLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(0,13,0,0),Margin=Padding.Empty};btnShortcut=MakeButton("Desktop shortcut","Starts the game with automatic sync",delegate{CreateShortcut();});btnShortcut.Width=200;actions.Controls.Add(btnShortcut);layout.Controls.Add(actions,0,2);
-            var note=Theme.Label("The shortcut starts the game with automatic sync.\nPath changes are saved on this PC only.",9,Theme.Muted);note.Dock=DockStyle.Fill;note.Padding=new Padding(0,8,0,0);layout.Controls.Add(note,0,3);return page;
+            var page=new Panel{BackColor=Theme.Background,AutoScroll=true};
+            var heading=PageHeading("Where everything lives.","Choose your sync folder. The other paths are usually found automatically.");
+            heading.Dock=DockStyle.Top;heading.Height=76;
+            var stack=new FlowLayoutPanel{Dock=DockStyle.Top,AutoSize=true,FlowDirection=FlowDirection.TopDown,WrapContents=false,Margin=Padding.Empty};
+            settingsGroup=stack;
+            tbCloud=AddPathCard(stack,"Sync folder","Usually the only one you need to choose. Use the same cloud folder on every PC.",settings.CloudDir,1,true);
+            tbGame=AddPathCard(stack,"Game · Found automatically","The program that starts the game: AzerothSurvivors.exe.",settings.GamePath,0,false);
+            tbSave=AddPathCard(stack,"Save game folder · Found automatically","Your characters and progress, normally %APPDATA%\\wenilla-rogue.",settings.SaveDir,2,false);
+            tbConfig=AddPathCard(stack,"Game config folder · Found automatically","AddOns and addon settings. Installer default: C:\\Git\\wenilla\\benilla-config.",settings.ConfigDir,3,false);
+            var actions=new Panel{Dock=DockStyle.Top,Height=48};
+            btnShortcut=MakeButton("Desktop shortcut","Starts the game with automatic sync",delegate{CreateShortcut();});btnShortcut.Width=200;btnShortcut.Top=10;actions.Controls.Add(btnShortcut);
+            page.Controls.Add(actions);page.Controls.Add(stack);page.Controls.Add(heading);
+            stack.SizeChanged+=delegate{foreach(Control card in stack.Controls)card.Width=Math.Max(400,stack.ClientSize.Width-2);};
+            RefreshPathChecks();return page;
         }
         Panel BuildLog()
         {
@@ -195,14 +186,16 @@ namespace AzerothSync
             progressText.Text="Ready for your next adventure";progressDetail.Text="Design preview with sample data · Not connected to your saves.";
             Write("Design preview — sample data only.",Level.Dim);Write("  Save game: in sync",Level.Good);Write("  AddOns: local is newer, upload",Level.Warn);Write("  Addon settings: in sync",Level.Good);
         }
-        void AnimateSample()
+        void AnimateSample(Action<bool> completed = null)
         {
-            SelectPage(overviewPage,navOverview);SetBusy(true);int value=0;var timer=new System.Windows.Forms.Timer{Interval=80};
+            if(!wizardActive)SelectPage(overviewPage,navOverview);SetBusy(true);int value=0;var timer=new System.Windows.Forms.Timer{Interval=80};
             timer.Tick+=delegate
             {
                 value+=5;ShowProgress("Checking files: "+value+" of 100 files",value);
                 if(value<100)return;timer.Stop();timer.Dispose();SetBusy(false);foreach(var row in areaRows.Values)row.SetState("In sync",Theme.Good);
                 progressText.Text="Preview finished";progressText.ForeColor=Theme.Good;progressDetail.Text="Sample run · No files were read or transferred.";Write("Preview completed. No files were changed.",Level.Good);
+                RefreshPathChecks();if(completed!=null)completed(true);
+                if(wizardActive && wizardPage.Visible){previewAdvice=new FirstSyncAdvice{Action=FirstSync.AlreadyInSync,Title="Already in sync",Message="Sample sync completed. No files were changed."};CheckWizardAdvice(null);wizardFeedback.Text="Preview finished. No files were changed.";}
             };timer.Start();
         }
     }

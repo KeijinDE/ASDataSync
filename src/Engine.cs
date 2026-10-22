@@ -27,6 +27,8 @@ namespace AzerothSync
         public const string FallbackConfigDir = @"C:\Git\wenilla\benilla-config";
 
         public string GamePath, CloudDir, SaveDir, ConfigDir, StateDir;
+        // True once the setup wizard was completed (or for settings files of existing users, see Load)
+        public bool SetupDone;
 
         public static string DefaultStateDir()
         {
@@ -58,6 +60,11 @@ namespace AzerothSync
             return "";
         }
 
+        public static bool SettingsFileExists(string stateDir)
+        {
+            return File.Exists(Path.Combine(stateDir, "settings.ini")) || File.Exists(Path.Combine(stateDir, "config.json"));
+        }
+
         // settings.ini in the state folder; without it config.json of the old script, then defaults
         public static Settings Load(string stateDir, string exeDir)
         {
@@ -69,6 +76,7 @@ namespace AzerothSync
             s.ConfigDir = "";
             string ini = Path.Combine(stateDir, "settings.ini");
             string json = Path.Combine(stateDir, "config.json");
+            bool setupKey = false, fileFound = File.Exists(ini) || File.Exists(json);
             if (File.Exists(ini))
             {
                 foreach (string line in File.ReadAllLines(ini))
@@ -81,6 +89,7 @@ namespace AzerothSync
                     else if (k == "CloudDir") s.CloudDir = v;
                     else if (k == "SaveDir") s.SaveDir = v;
                     else if (k == "ConfigDir") s.ConfigDir = v;
+                    else if (k == "SetupDone") { s.SetupDone = v == "1"; setupKey = true; }
                 }
             }
             else if (File.Exists(json))
@@ -98,6 +107,9 @@ namespace AzerothSync
             // If this program sits in the game folder, that game always wins
             if (exeDir != null && File.Exists(Path.Combine(exeDir, GameExe))) s.GamePath = Path.Combine(exeDir, GameExe);
             if (s.CloudDir.Length == 0) s.CloudDir = DefaultCloudDir(exeDir);
+            // Existing users (a settings file with a sync folder, but no SetupDone key) must not see the setup wizard.
+            // A fresh PC without any settings file always starts with the wizard, even if the folder is found automatically.
+            if (!setupKey && fileFound && s.CloudDir.Length > 0) s.SetupDone = true;
             // Empty or no longer existing: use what is actually there (game folder, then fallback)
             if (s.ConfigDir.Length == 0 || !Directory.Exists(s.ConfigDir))
             {
@@ -111,7 +123,8 @@ namespace AzerothSync
         {
             Directory.CreateDirectory(StateDir);
             Engine.WriteAtomic(Path.Combine(StateDir, "settings.ini"), string.Join("\r\n", new[] {
-                "GamePath=" + GamePath, "CloudDir=" + CloudDir, "SaveDir=" + SaveDir, "ConfigDir=" + ConfigDir }) + "\r\n");
+                "GamePath=" + GamePath, "CloudDir=" + CloudDir, "SaveDir=" + SaveDir, "ConfigDir=" + ConfigDir,
+                "SetupDone=" + (SetupDone ? "1" : "0") }) + "\r\n");
         }
 
         // Every run works on its own copy, so changes in the window cannot affect a running sync
@@ -442,6 +455,9 @@ namespace AzerothSync
         }
 
         static bool IsEmpty(string h) { return h == None || h == Empty; }
+
+        // True for the fingerprints of a missing or empty folder (read only helper for the setup advice)
+        public static bool IsEmptyHash(string h) { return IsEmpty(h); }
 
         public static string Newest(string dir, string[] exclude)
         {

@@ -8,7 +8,7 @@ using System.Linq;
 using System.Threading;
 using AzerothSync;
 
-static class EngineTests
+static partial class EngineTests
 {
     static string root;
     static int passed, failed;

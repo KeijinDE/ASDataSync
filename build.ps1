@@ -19,7 +19,7 @@ $iconArg = if (Test-Path $ico) { "/win32icon:$ico" } else { $null }
     "/win32manifest:$(Join-Path $here 'src\app.manifest')" `
     /r:System.Web.Extensions.dll /r:System.IO.Compression.dll /r:System.IO.Compression.FileSystem.dll `
     /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Core.dll `
-    (Join-Path $here 'src\AssemblyInfo.cs') (Join-Path $here 'src\Engine.cs') (Join-Path $here 'src\Theme.cs') (Join-Path $here 'src\Look.cs') (Join-Path $here 'src\App.cs')
+    (Join-Path $here 'src\AssemblyInfo.cs') (Join-Path $here 'src\Engine.cs') (Join-Path $here 'src\Setup.cs') (Join-Path $here 'src\Theme.cs') (Join-Path $here 'src\Look.cs') (Join-Path $here 'src\App.cs') (Join-Path $here 'src\Wizard.cs')
 if ($LASTEXITCODE -ne 0) { throw 'Build failed' }
 Write-Host "Built: $out"
 if ($DeployTo) {

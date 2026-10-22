@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.5.0 (2026-10-22)
+
+Easier setup, based on tester feedback.
+
+* **Setup guide** on the first start, four steps: Game, Cloud, First sync,
+  Done. Reopen it any time with **Setup guide** in the sidebar.
+* **Cloud folder:** finds Google Drive for desktop, OneDrive and Dropbox and
+  suggests a folder with one click. Explains that AzerothSync never logs into
+  your cloud account: your cloud app syncs a normal folder, AzerothSync only
+  copies files into it.
+* **First sync:** compares save game, AddOns and addon settings and tells you
+  what to do on this PC: upload, download, or choose which progress to keep.
+  It checks again right before copying, in case another PC uploaded meanwhile.
+* Clear messages when the game config folder (`benilla-config`) is missing or
+  files are still busy because the cloud app is syncing.
+* **Paths page:** every path explains what it is for, shows whether it was
+  found, and has an **Open** button. The sync folder is marked as the one you
+  usually need to choose.
+* README: new Quick start and FAQ.
+* Existing setups keep working, the guide is not forced on them.
+* Not yet: Steam Deck / Linux support is being worked on.
+
 ## 1.4.0
 
 * New look: dark window with bronze outlines and gold accents, a navigation

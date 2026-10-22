@@ -23,6 +23,8 @@ GZip or Brotli).
 | File | Purpose |
 |---|---|
 | `src/Engine.cs` | All sync logic, no UI (settings, hashing, mirroring, backups, conflicts) |
+| `src/Setup.cs` | Read only cloud detection, path checks and first sync advice |
+| `src/Wizard.cs` | Four step setup guide, visible path checks and Explorer actions |
 | `src/App.cs` | Window logic, conflict dialog, `--play` mode, desktop shortcut, log file |
 | `src/Theme.cs`, `src/Look.cs` | Look since 1.4.0 (see `docs/DESIGN.md`), design preview mode |
 | `build.ps1` | Compiles with `C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe` (C# 5, .NET Framework 4.x). Optional `-DeployTo <folder>` |
@@ -41,7 +43,7 @@ The exe reads its old `state.json` values and converts them.
 | Save game | `%APPDATA%\wenilla-rogue\` (`Saves\*.sav`, `characters.txt`, `characters.before-import.txt`, `language.txt`) |
 | Game config | setting, otherwise `<game folder>\benilla-config\` if it exists, otherwise `C:\Git\wenilla\benilla-config` (contains `AddOns\`, `saved\`, `config.toml`, `layout\`, `chat\`, `camera\`, `cache\`) |
 | Sync folder | the folder containing `AzerothSync.exe`, if it already holds `manifest.json` or `data\`; otherwise must be chosen |
-| Per PC settings | `%LOCALAPPDATA%\AzerothSync\settings.ini` (keys `GamePath`, `CloudDir`, `SaveDir`, `ConfigDir`) |
+| Per PC settings | `%LOCALAPPDATA%\AzerothSync\settings.ini` (keys `GamePath`, `CloudDir`, `SaveDir`, `ConfigDir`, `SetupDone`) |
 | Per PC sync memory | `%LOCALAPPDATA%\AzerothSync\state.json` |
 | Local backups | `%LOCALAPPDATA%\AzerothSync\backups\<area>_<yyyy-MM-dd_HH-mm-ss-fff>_<PC>.zip` (last 20 per area) |
 | Log | `%LOCALAPPDATA%\AzerothSync\log.txt` (about 1 MB, previous one `log.old.txt`) |
@@ -170,3 +172,59 @@ the same time end in a conflict question, not in a merge.
   lets tests change files between decision and copy.
 * The PowerShell script `AzerothSync.ps1` is deprecated. It does not know
   format 2 fingerprints and would ask conflict questions after the exe ran.
+
+## Setup since 1.5.0
+
+`Setup.cs` never writes files. `FindClouds` detects cloud client folders;
+`CheckGame`, `CheckCloud`, `CheckSave` and `CheckConfig` explain the paths.
+`InspectCloud` reads the cloud manifest. `AdviseFirstSync` recommends upload,
+download, a direction choice, no action or returning to the cloud step.
+It compares every available area (save game, AddOns, addon settings), returns
+AlreadyInSync when they match and lists differing labels in FirstSyncAdvice.Areas.
+The engine remains responsible for validating paths and confirming replacements.
+FindClouds() caches detection per process; Search again uses FindClouds(true).
+The window warms detection on a background thread after Shown. Cloud path checks
+show Checking… until detection and background inspection finish. The cloud step
+keeps its candidate list across redraws; Search again explicitly refreshes it.
+While scanning, Looking for cloud apps… is shown, candidates and Search again
+are disabled, and Choose another folder remains usable. Sequence numbers discard
+older scan and inspection results, including after path changes or a busy sync.
+Neither detection nor inspection starts while busy. Preview remains sample only.
+
+`Wizard.cs` presents Game, Cloud, First sync and Done in the main window.
+The guide opens when `SetupDone` is false, including when launched with
+`--play`; it never launches the game automatically after setup. Existing
+settings with a cloud folder but no SetupDone key are treated as configured.
+Finish stores `SetupDone=1`. Closing the guide or window stores 1 if a cloud
+folder is set, otherwise 0. The guide can always be reopened from the sidebar.
+Settings are saved through the existing per PC settings path.
+
+All sync buttons use `Run` and its settings snapshot, game checks and busy
+lock. The wizard is disabled during work and shows progress. After completion
+it refreshes advice. Immediately before a wizard transfer, advice is recomputed;
+a changed Fingerprint refreshes step 3 with a notice and does not start work.
+All advice hashing runs on a background thread with a cloned settings snapshot.
+Step 3 caches results; entering the step, path changes, Check again and completed
+syncs request new advice. Advanced only redraws. Sequence numbers discard results
+after leaving the guide, closing the window or starting a newer check. While
+checking, the guide shows Checking your files and no transfer buttons. Checks
+never start while a sync is busy. Sidebar navigation resets wizardActive, so
+completed runs only refresh a visible guide and successful --play runs still close.
+FixConfigFolder shows a direct config picker and skipped areas. Next requires
+an explicit Continue without AddOns. Other states also warn about skipped areas.
+RetryLater shows its title and message, only Check again, and disables Next.
+Recommended downloads/uploads call Pull(false)/Push(false), retaining completeness
+and conflict checks. Only the two explicit AskWhichIsNewer choices use force.
+Except for FixConfigFolder and RetryLater, Next is enabled for AlreadyInSync, NothingYet or a successful wizard transfer,
+even if differences remain; those areas stay visible. Failed or cancelled work
+does not unlock Next. Changing a path clears the recorded wizard success.
+Path checks run on Leave, after choosing a path, after runs or after a 400 ms
+input pause, rather than on each keystroke. The first PC uploads; other PCs download after their cloud
+app finishes transferring. The installer default config location is
+`C:\Git\wenilla\benilla-config`.
+
+The design preview uses sample path checks, cloud candidates and first sync
+advice. It never probes those sample folders or loads real settings.
+`AzerothSync.DesignPreview.exe --capture` renders the overview, Paths and two
+wizard steps to PNG files under `docs`, including minimum window size examples.
+UI tests cover all advice actions, busy locking and setup close behaviour.

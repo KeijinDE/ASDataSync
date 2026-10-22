@@ -35,7 +35,7 @@ namespace AzerothSync
 
     partial class MainForm : Form
     {
-        public const string Version = "1.4.0";
+        public const string Version = "1.5.0";
         readonly bool autoPlay;
         Settings settings;
         Control settingsGroup;
@@ -53,13 +53,17 @@ namespace AzerothSync
             this.designPreview = designPreview;
             this.autoPlay = autoPlay;
             settings = designPreview ? SampleSettings() : Settings.Load(Settings.DefaultStateDir(), Path.GetDirectoryName(Application.ExecutablePath));
+            pathCheckTimer.Tick += delegate { RefreshPathChecks(); };
+            FormClosed += delegate { cloudScanSequence++;cloudInspectSequence++;wizardCheckSequence++;wizardActive=false;pathCheckTimer.Dispose(); };
             BuildWindow();
 
             Shown += delegate
             {
                 Theme.DarkChrome(this);
                 if (designPreview) { ShowSampleState(); return; }
-                if (autoPlay) Run(e => e.Play());
+                cloudWindowShown=true;StartCloudScan(false);
+                if (!settings.SetupDone) OpenWizard();
+                else if (autoPlay) Run(e => e.Play());
                 else
                 {
                     if (!File.Exists(settings.GamePath)) Write("Game not found. Put AzerothSync.exe into the game folder or choose the game above.", Level.Warn);
@@ -73,39 +77,16 @@ namespace AzerothSync
                 if (busy && e.CloseReason == CloseReason.UserClosing &&
                     MessageBox.Show(this, "A sync is still running. Close anyway?", "AzerothSync", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
                     e.Cancel = true;
-            };
-        }
-
-        TextBox AddRow(TableLayoutPanel grid, string label, string value, bool file, string tip)
-        {
-            int row = grid.RowCount++;
-            var l = new Label { Text = label, AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(0, 6, 8, 0) };
-            lookTips.SetToolTip(l, tip);
-            grid.Controls.Add(l, 0, row);
-            var tb = new TextBox { Text = value, Dock = DockStyle.Fill };
-            tb.Leave += delegate { SaveSettings(); };
-            grid.Controls.Add(tb, 1, row);
-            var b = new BronzeButton { Text = "…", Width = 38, Height = 30, AccessibleName = "Choose " + label };
-            b.Click += delegate
-            {
-                if (designPreview) return;
-                if (file)
+                if (!e.Cancel && wizardActive)
                 {
-                    using (var d = new OpenFileDialog { Filter = "Program (*.exe)|*.exe", FileName = tb.Text })
+                    if (!busy) CompleteSetup(false);
+                    else if (!designPreview)
                     {
-                        try { d.InitialDirectory = Path.GetDirectoryName(tb.Text); } catch { }
-                        if (d.ShowDialog(this) == DialogResult.OK) tb.Text = d.FileName;
+                        settings.SetupDone = settings.CloudDir.Length > 0;
+                        try { settings.Save(); } catch { }
                     }
                 }
-                else
-                {
-                    using (var d = new FolderBrowserDialog { SelectedPath = tb.Text, ShowNewFolderButton = true })
-                        if (d.ShowDialog(this) == DialogResult.OK) tb.Text = d.SelectedPath;
-                }
-                SaveSettings();
             };
-            grid.Controls.Add(b, 2, row);
-            return tb;
         }
 
         Button MakeButton(string text, string tip, EventHandler click)
@@ -171,20 +152,25 @@ namespace AzerothSync
             progressText.Text = percent < 0 ? "Ready" : TranslateProgress(text);
             progressText.ForeColor = percent < 0 ? Theme.Muted : Theme.Text;
             progress.Value = Math.Max(0, Math.Min(100, percent));
+            if (wizardActive && wizardFeedback != null) wizardFeedback.Text = progressText.Text;
         }
 
         void SetBusy(bool on)
         {
             busy = on;
+            if(on){cloudScanSequence++;cloudScanning=false;InvalidateCloudInfo();}
+            else if(cloudWindowShown)StartCloudScan(false);
             foreach (var b in new[] { btnPlay, btnPull, btnPush, btnStatus, btnShortcut }) b.Enabled = !on;
             settingsGroup.Enabled = !on;
+            if (wizardPage != null) wizardPage.Enabled = !on;
+            if (wizardFeedback != null) wizardFeedback.Text = on ? "Sync running. Please wait; details are in Log." : progressText.Text;
         }
 
         // work returns true only if everything it should do was done
-        void Run(Func<Engine, bool> work)
+        void Run(Func<Engine, bool> work, Action<bool> completed = null)
         {
             if (busy) return;
-            if (designPreview) { AnimateSample(); return; }
+            if (designPreview) { AnimateSample(completed); return; }
             SaveSettings();
             // The running sync gets its own copy of the settings
             var engine = new Engine(settings.Clone());
@@ -194,6 +180,7 @@ namespace AzerothSync
                 ThemedDialog.Ask(this, "Confirm change", TranslateQuestion(q), false) == Choice.Local));
             engine.AskConflict = (sets, pulling) => (Choice)Invoke(new Func<Choice>(() => ConflictDialog.Ask(this, engine, sets, pulling)));
             SetBusy(true);
+            pathCheckTimer.Stop();
             Write("", Level.Info);
             var t = new Thread(() =>
             {
@@ -210,9 +197,13 @@ namespace AzerothSync
                     ShowProgress("", -1);
                     progressText.Text = ok ? "Done" : "Sync not complete · see Log";
                     progressText.ForeColor = ok ? Theme.Good : Theme.Warning;
-                    if (autoPlay && !ok)
+                    if (wizardActive) wizardFeedback.Text = progressText.Text;
+                    RefreshPathChecks();
+                    if (completed != null) completed(ok);
+                    if (wizardActive && wizardPage.Visible && wizardStep==2) CheckWizardAdvice(null);
+                    if (autoPlay && !wizardActive && !ok)
                         Write("Not everything was synced, see above. The window stays open. Fix the cause, then use Upload or Download.", Level.Warn);
-                    if (autoPlay && ok)
+                    if (autoPlay && !wizardActive && ok)
                     {
                         Write("Done, closing in a moment.", Level.Dim);
                         var timer = new System.Windows.Forms.Timer { Interval = 4000 };
